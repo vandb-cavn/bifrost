@@ -1029,3 +1029,46 @@ pricing-overrides-by-id:
               $ref: '../../schemas/management/common.yaml#/MessageResponse'
       '500':
         $ref: '../../openapi.yaml#/components/responses/InternalError'
+
+# Complexity Tier Boundaries
+
+complexity-tier-boundaries:
+  get:
+    operationId: getComplexityTierBoundaries
+    summary: Get complexity tier boundaries
+    description: Returns the current complexity tier boundary thresholds. Returns defaults if none have been configured.
+    tags:
+      - Governance
+    responses:
+      '200':
+        description: Successful response
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/governance.yaml#/ComplexityTierBoundaries'
+      '500':
+        $ref: '../../openapi.yaml#/components/responses/InternalError'
+
+  put:
+    operationId: updateComplexityTierBoundaries
+    summary: Update complexity tier boundaries
+    description: Updates the score thresholds for complexity tier classification. Values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.
+    tags:
+      - Governance
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../../schemas/management/governance.yaml#/ComplexityTierBoundaries'
+    responses:
+      '200':
+        description: Complexity tier boundaries updated successfully
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/governance.yaml#/ComplexityTierBoundaries'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '500':
+        $ref: '../../openapi.yaml#/components/responses/InternalError'

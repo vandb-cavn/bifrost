@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/network"
 	"github.com/maximhq/bifrost/core/providers/gemini"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -32,6 +34,96 @@ const (
 
 	VirtualKeyPrefix = "sk-bf-"
 )
+
+type complexityAnalysisLogPayload struct {
+	Score       float64                          `json:"score"`
+	Tier        string                           `json:"tier"`
+	Dimensions  complexityAnalysisLogDimensions  `json:"dimensions"`
+	Contribs    complexityAnalysisLogContribs    `json:"contributions"`
+	MatchCounts complexityAnalysisLogMatchCounts `json:"match_counts"`
+	Debug       complexityAnalysisLogDebug       `json:"debug"`
+}
+
+type complexityAnalysisLogDimensions struct {
+	CodePresence       float64 `json:"code_presence"`
+	ReasoningMarkers   float64 `json:"reasoning_markers"`
+	TechnicalTerms     float64 `json:"technical_terms"`
+	SimpleIndicators   float64 `json:"simple_indicators"`
+	TokenCount         float64 `json:"token_count"`
+	ConversationCtx    float64 `json:"conversation_context"`
+	SystemPromptSignal float64 `json:"system_prompt_signal"`
+	OutputComplexity   float64 `json:"output_complexity"`
+}
+
+type complexityAnalysisLogContribs struct {
+	Code          float64 `json:"code"`
+	Reasoning     float64 `json:"reasoning"`
+	Technical     float64 `json:"technical"`
+	SimplePenalty float64 `json:"simple_penalty"`
+	TokenCount    float64 `json:"token_count"`
+}
+
+type complexityAnalysisLogMatchCounts struct {
+	Code      int `json:"code"`
+	Reasoning int `json:"reasoning"`
+	Technical int `json:"technical"`
+	Simple    int `json:"simple"`
+	Output    int `json:"output"`
+}
+
+type complexityAnalysisLogDebug struct {
+	WordCount           int     `json:"word_count"`
+	LastMessageScore    float64 `json:"last_message_score"`
+	BlendedScore        float64 `json:"blended_score"`
+	SimpleWeightApplied float64 `json:"simple_weight_applied"`
+	OutputFloorMinScore float64 `json:"output_floor_min_score"`
+	OutputFloorApplied  bool    `json:"output_floor_applied"`
+}
+
+func formatComplexityAnalysisLog(result *complexity.ComplexityResult) string {
+	payload := complexityAnalysisLogPayload{
+		Score: result.Score,
+		Tier:  result.Tier,
+		Dimensions: complexityAnalysisLogDimensions{
+			CodePresence:       result.CodePresence,
+			ReasoningMarkers:   result.ReasoningMarkers,
+			TechnicalTerms:     result.TechnicalTerms,
+			SimpleIndicators:   result.SimpleIndicators,
+			TokenCount:         result.TokenCount,
+			ConversationCtx:    result.ConversationCtx,
+			SystemPromptSignal: result.SystemPromptSignal,
+			OutputComplexity:   result.OutputComplexity,
+		},
+		Contribs: complexityAnalysisLogContribs{
+			Code:          result.CodePresence * 0.30,
+			Reasoning:     result.ReasoningMarkers * 0.25,
+			Technical:     result.TechnicalTerms * 0.25,
+			SimplePenalty: -(result.SimpleIndicators * result.SimpleWeightApplied),
+			TokenCount:    result.TokenCount * 0.10,
+		},
+		MatchCounts: complexityAnalysisLogMatchCounts{
+			Code:      result.CodeMatchCount,
+			Reasoning: result.ReasoningMatchCount,
+			Technical: result.TechnicalMatchCount,
+			Simple:    result.SimpleMatchCount,
+			Output:    result.OutputMatchCount,
+		},
+		Debug: complexityAnalysisLogDebug{
+			WordCount:           result.WordCount,
+			LastMessageScore:    result.LastMessageScore,
+			BlendedScore:        result.ConversationBlend,
+			SimpleWeightApplied: result.SimpleWeightApplied,
+			OutputFloorMinScore: result.OutputFloorMinScore,
+			OutputFloorApplied:  result.OutputFloorApplied,
+		},
+	}
+
+	encoded, err := sonic.MarshalString(payload)
+	if err != nil {
+		return fmt.Sprintf("Complexity analysis details unavailable: marshal error=%v", err)
+	}
+	return "Complexity analysis details: " + encoded
+}
 
 // Config is the configuration for the governance plugin
 type Config struct {
@@ -58,6 +150,7 @@ type BaseGovernancePlugin interface {
 	PostMCPHook(ctx *schemas.BifrostContext, resp *schemas.BifrostMCPResponse, bifrostErr *schemas.BifrostError) (*schemas.BifrostMCPResponse, *schemas.BifrostError, error)
 	Cleanup() error
 	GetGovernanceStore() GovernanceStore
+	ReloadComplexityTierBoundaries(boundaries *complexity.TierBoundaries)
 }
 
 // GovernancePlugin implements the main governance plugin with hierarchical budget system
@@ -88,6 +181,9 @@ type GovernancePlugin struct {
 	requiredHeaders       *[]string // pointer to live config slice; lowercased at check time
 	isEnterprise          bool
 	disableAutoToolInject *bool
+
+	// Complexity analyzer is published atomically so boundary reloads are lock-free.
+	complexityAnalyzer atomic.Pointer[complexity.ComplexityAnalyzer]
 }
 
 // Init initializes and returns a governance plugin instance.
@@ -230,6 +326,17 @@ func Init(
 		disableAutoToolInject: disableAutoToolInject,
 		inMemoryStore:         inMemoryStore,
 	}
+	// Boot analyzer with configured boundaries if available
+	var tierBoundaries *complexity.TierBoundaries
+	if governanceConfig != nil && governanceConfig.ComplexityTierBoundaries != nil {
+		b := governanceConfig.ComplexityTierBoundaries
+		tierBoundaries = &complexity.TierBoundaries{
+			SimpleMedium:     b.SimpleMedium,
+			MediumComplex:    b.MediumComplex,
+			ComplexReasoning: b.ComplexReasoning,
+		}
+	}
+	plugin.complexityAnalyzer.Store(complexity.NewComplexityAnalyzer(tierBoundaries))
 	return plugin, nil
 }
 
@@ -267,6 +374,7 @@ func InitFromStore(
 	if governanceStore == nil {
 		return nil, fmt.Errorf("governance store is nil")
 	}
+
 	// Handle nil config - use safe defaults
 	var isVkMandatory *bool
 	var requiredHeaders *[]string
@@ -324,12 +432,29 @@ func InitFromStore(
 		isEnterprise:          config != nil && config.IsEnterprise,
 		disableAutoToolInject: disableAutoToolInject,
 	}
+	// Boot analyzer with configured boundaries if available
+	var tierBoundaries *complexity.TierBoundaries
+	if configStore != nil {
+		if b, err := configStore.GetComplexityTierBoundaries(ctx); err == nil && b != nil {
+			tierBoundaries = &complexity.TierBoundaries{
+				SimpleMedium:     b.SimpleMedium,
+				MediumComplex:    b.MediumComplex,
+				ComplexReasoning: b.ComplexReasoning,
+			}
+		}
+	}
+	plugin.complexityAnalyzer.Store(complexity.NewComplexityAnalyzer(tierBoundaries))
 	return plugin, nil
 }
 
 // GetName returns the name of the plugin
 func (p *GovernancePlugin) GetName() string {
 	return PluginName
+}
+
+// ReloadComplexityTierBoundaries swaps the analyzer with new boundaries.
+func (p *GovernancePlugin) ReloadComplexityTierBoundaries(boundaries *complexity.TierBoundaries) {
+	p.complexityAnalyzer.Store(complexity.NewComplexityAnalyzer(boundaries))
 }
 
 // UpdateEnforceAuthOnInference updates the enforce auth on inference config
@@ -420,7 +545,23 @@ func (p *GovernancePlugin) HTTPTransportPreHook(ctx *schemas.BifrostContext, req
 		}
 	}
 
-	//1. Apply routing rules only if we have rules or matched decision
+	// Attaching team and customer based on the virtual key
+	if virtualKey != nil {
+		if virtualKey.TeamID != nil {
+			ctx.SetValue(schemas.BifrostContextKeyGovernanceTeamID, *virtualKey.TeamID)
+		}
+		if virtualKey.Team != nil {
+			ctx.SetValue(schemas.BifrostContextKeyGovernanceTeamName, virtualKey.Team.Name)
+		}
+		if virtualKey.CustomerID != nil {
+			ctx.SetValue(schemas.BifrostContextKeyGovernanceCustomerID, *virtualKey.CustomerID)
+		}
+		if virtualKey.Customer != nil {
+			ctx.SetValue(schemas.BifrostContextKeyGovernanceCustomerName, virtualKey.Customer.Name)
+		}
+	}
+
+	// 1. Apply routing logic when CEL rules are configured.
 	var routingDecision *RoutingDecision
 	if hasRoutingRules {
 		var err error
@@ -481,7 +622,7 @@ func (p *GovernancePlugin) HTTPTransportPreHook(ctx *schemas.BifrostContext, req
 // The request body is streaming and cannot be modified, so we build a synthetic payload
 // from pre-extracted metadata and run VK validation, routing rules, and load balancing.
 // Any model changes are propagated via the metadata in context (not body rewriting).
-func (p *GovernancePlugin) governLargePayload(ctx *schemas.BifrostContext, req *schemas.HTTPRequest, virtualKeyValue *string, hasRoutingRules bool) (*schemas.HTTPResponse, error) {
+func (p *GovernancePlugin) governLargePayload(ctx *schemas.BifrostContext, req *schemas.HTTPRequest, virtualKeyValue *string, shouldEvaluateRouting bool) (*schemas.HTTPResponse, error) {
 	metadata, _ := ctx.Value(schemas.BifrostContextKeyLargePayloadMetadata).(*schemas.LargePayloadMetadata)
 	if metadata == nil || metadata.Model == "" {
 		return nil, nil
@@ -520,7 +661,7 @@ func (p *GovernancePlugin) governLargePayload(ctx *schemas.BifrostContext, req *
 	}
 
 	// Apply routing rules (read-only: decisions still affect downstream evaluation)
-	if hasRoutingRules {
+	if shouldEvaluateRouting {
 		var err error
 		payload, _, err = p.applyRoutingRules(ctx, req, payload, virtualKey)
 		if err != nil {
@@ -879,6 +1020,24 @@ func (p *GovernancePlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *s
 		}
 	}
 
+	// Set up lazy complexity computation — only runs if a rule actually references "complexity_tier"
+	var computeComplexity func() *complexity.ComplexityResult
+	if analyzer := p.complexityAnalyzer.Load(); analyzer != nil && p.store.HasComplexityRules() {
+		computeComplexity = func() *complexity.ComplexityResult {
+			if input, ok := buildComplexityInput(ctx, body); ok {
+				result := analyzer.Analyze(input)
+				p.logger.Debug("[Governance] Complexity analysis: score=%.3f, tier=%s, code=%d, reasoning=%d, technical=%d",
+					result.Score, result.Tier,
+					result.CodeMatchCount, result.ReasoningMatchCount, result.TechnicalMatchCount)
+				ctx.AppendRoutingEngineLog(schemas.RoutingEngineComplexityRouter, formatComplexityAnalysisLog(result))
+				return result
+			}
+			p.logger.Debug("[Governance] Complexity analysis skipped: unsupported request type")
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineComplexityRouter, "Complexity analysis skipped: no supported text-bearing input detected")
+			return nil
+		}
+	}
+
 	// Build routing context
 	routingCtx := &RoutingContext{
 		VirtualKey:               virtualKey,
@@ -888,6 +1047,7 @@ func (p *GovernancePlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *s
 		Headers:                  req.Headers,
 		QueryParams:              req.Query,
 		BudgetAndRateLimitStatus: p.store.GetBudgetAndRateLimitStatus(ctx, model, provider, virtualKey, nil, nil, nil),
+		computeComplexity:        computeComplexity,
 	}
 
 	p.logger.Debug("[HTTPTransport] Built routing context: provider=%s, model=%s, requestType=%s, vk=%v, headerCount=%d, paramCount=%d",
@@ -902,7 +1062,7 @@ func (p *GovernancePlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *s
 		return body, nil, nil
 	}
 
-	// If a routing rule matched, apply the decision
+	// If a routing decision matched, apply it
 	if decision != nil {
 		p.logger.Debug("[Governance] Routing rule matched: %s", decision.MatchedRuleName)
 
@@ -932,7 +1092,6 @@ func (p *GovernancePlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *s
 			}
 			body["model"] = newModel
 		}
-		// Append routing-rule to routing engines used
 		schemas.AppendToContextList(ctx, schemas.BifrostContextKeyRoutingEnginesUsed, schemas.RoutingEngineRoutingRule)
 
 		// Add fallbacks if present

@@ -127,9 +127,9 @@ type ConfigData struct {
 	// from config.json. Omitting this field or setting it to 2 uses v1.5.0+ semantics:
 	// empty = deny all, ["*"] = allow all. Setting it to 1 restores v1.4.x semantics:
 	// empty = allow all (equivalent to ["*"]).
-	Version           int                                   `json:"version,omitempty"`
-	Client            *configstore.ClientConfig             `json:"client"`
-	EncryptionKey     *schemas.EnvVar                       `json:"encryption_key"`
+	Version       int                       `json:"version,omitempty"`
+	Client        *configstore.ClientConfig `json:"client"`
+	EncryptionKey *schemas.EnvVar           `json:"encryption_key"`
 	// Deprecated: Use GovernanceConfig.AuthConfig instead
 	AuthConfig        *configstore.AuthConfig               `json:"auth_config,omitempty"`
 	Providers         map[string]configstore.ProviderConfig `json:"providers"`
@@ -1457,6 +1457,22 @@ func mergeGovernanceConfig(ctx context.Context, config *Config, configData *Conf
 			logger.Fatal("failed to sync governance config: %v", err)
 		}
 	}
+
+	// Merge complexity tier boundaries — DB wins after initial seed.
+	// Only seed from file if DB has no boundaries yet.
+	if config.GovernanceConfig.ComplexityTierBoundaries == nil && configData.Governance.ComplexityTierBoundaries != nil {
+		if err := configData.Governance.ComplexityTierBoundaries.Validate(); err != nil {
+			logger.Error("invalid complexity tier boundaries in config file: %v — using defaults", err)
+		} else {
+			config.GovernanceConfig.ComplexityTierBoundaries = configData.Governance.ComplexityTierBoundaries
+			if config.ConfigStore != nil {
+				if err := config.ConfigStore.UpdateComplexityTierBoundaries(ctx, configData.Governance.ComplexityTierBoundaries); err != nil {
+					logger.Warn("failed to seed complexity tier boundaries from config file: %v", err)
+				}
+			}
+		}
+	}
+
 	// Sync pricing overrides into the model catalog in one batch to avoid
 	// rebuilding the lookup map on every iteration.
 	if config.ModelCatalog != nil {
@@ -1740,6 +1756,20 @@ func createGovernanceConfigInStore(ctx context.Context, config *Config) {
 
 			virtualKey.ProviderConfigs = providerConfigs
 			virtualKey.MCPConfigs = mcpConfigs
+		}
+
+		if config.GovernanceConfig.ComplexityTierBoundaries != nil {
+			configJSON, err := json.Marshal(config.GovernanceConfig.ComplexityTierBoundaries)
+			if err != nil {
+				return fmt.Errorf("failed to marshal complexity tier boundaries: %w", err)
+			}
+
+			if err := tx.Save(&configstoreTables.TableGovernanceConfig{
+				Key:   configstoreTables.ConfigComplexityTierBoundariesKey,
+				Value: string(configJSON),
+			}).Error; err != nil {
+				return fmt.Errorf("failed to save complexity tier boundaries: %w", err)
+			}
 		}
 
 		// Create pricing overrides after virtual keys so that scoped overrides referencing

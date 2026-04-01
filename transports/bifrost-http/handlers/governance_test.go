@@ -9,6 +9,7 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/plugins/governance"
+	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 )
 
@@ -19,6 +20,10 @@ type mockGovernanceManagerForVK struct {
 }
 
 func (m *mockGovernanceManagerForVK) GetGovernanceData() *governance.GovernanceData {
+	return nil
+}
+
+func (m *mockGovernanceManagerForVK) ReloadComplexityTierBoundaries(ctx context.Context, boundaries *configstore.ComplexityTierBoundaries) error {
 	return nil
 }
 
@@ -34,6 +39,41 @@ func (m *mockConfigStoreForVK) GetVirtualKeysPaginated(_ context.Context, _ conf
 
 func (m *mockConfigStoreForVK) GetVirtualKeys(_ context.Context) ([]configstoreTables.TableVirtualKey, error) {
 	return nil, nil
+}
+
+type mockGovernanceManagerForBoundaries struct {
+	GovernanceManager
+	reloadCalls int
+}
+
+func (m *mockGovernanceManagerForBoundaries) ReloadComplexityTierBoundaries(ctx context.Context, boundaries *configstore.ComplexityTierBoundaries) error {
+	m.reloadCalls++
+	return nil
+}
+
+func (m *mockGovernanceManagerForBoundaries) GetGovernanceData() *governance.GovernanceData {
+	return nil
+}
+
+type mockConfigStoreForBoundaries struct {
+	configstore.ConfigStore
+	boundaries *configstore.ComplexityTierBoundaries
+}
+
+func (m *mockConfigStoreForBoundaries) GetComplexityTierBoundaries(_ context.Context) (*configstore.ComplexityTierBoundaries, error) {
+	if m.boundaries == nil {
+		return nil, nil
+	}
+	b := *m.boundaries
+	return &b, nil
+}
+
+func (m *mockConfigStoreForBoundaries) UpdateComplexityTierBoundaries(_ context.Context, b *configstore.ComplexityTierBoundaries) error {
+	if b != nil {
+		copy := *b
+		m.boundaries = &copy
+	}
+	return nil
 }
 
 // TestGetVirtualKeys_PaginatedEndpoint_ResponseShape verifies the JSON response
@@ -164,6 +204,71 @@ func TestGetVirtualKeys_PaginatedEndpoint_QueryParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetComplexityTierBoundaries_DefaultsWhenMissing(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	h := &GovernanceHandler{
+		configStore:       &mockConfigStoreForBoundaries{},
+		governanceManager: &mockGovernanceManagerForBoundaries{},
+	}
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("GET")
+	ctx.Request.SetRequestURI("/api/governance/complexity-tier-boundaries")
+
+	h.getComplexityTierBoundaries(ctx)
+
+	require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
+
+	var resp configstore.ComplexityTierBoundaries
+	require.NoError(t, json.Unmarshal(ctx.Response.Body(), &resp))
+	require.Equal(t, 0.15, resp.SimpleMedium)
+	require.Equal(t, 0.35, resp.MediumComplex)
+	require.Equal(t, 0.60, resp.ComplexReasoning)
+}
+
+func TestUpdateComplexityTierBoundaries_ValidatesAndPersists(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	store := &mockConfigStoreForBoundaries{}
+	manager := &mockGovernanceManagerForBoundaries{}
+	h := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: manager,
+	}
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("PUT")
+	ctx.Request.SetRequestURI("/api/governance/complexity-tier-boundaries")
+	ctx.Request.SetBodyString(`{"simple_medium":0.20,"medium_complex":0.40,"complex_reasoning":0.70}`)
+
+	h.updateComplexityTierBoundaries(ctx)
+
+	require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+	require.NotNil(t, store.boundaries)
+	require.Equal(t, 0.20, store.boundaries.SimpleMedium)
+	require.Equal(t, 1, manager.reloadCalls)
+}
+
+func TestUpdateComplexityTierBoundaries_RejectsInvalidBoundaries(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	h := &GovernanceHandler{
+		configStore:       &mockConfigStoreForBoundaries{},
+		governanceManager: &mockGovernanceManagerForBoundaries{},
+	}
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("PUT")
+	ctx.Request.SetRequestURI("/api/governance/complexity-tier-boundaries")
+	// simple_medium > medium_complex — invalid ordering
+	ctx.Request.SetBodyString(`{"simple_medium":0.4,"medium_complex":0.3,"complex_reasoning":0.6}`)
+
+	h.updateComplexityTierBoundaries(ctx)
+
+	require.Equal(t, fasthttp.StatusBadRequest, ctx.Response.StatusCode())
 }
 
 // Ensure mockLogger satisfies schemas.Logger (already defined in middlewares_test.go

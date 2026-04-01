@@ -17,6 +17,7 @@ import (
 	"github.com/fasthttp/router"
 	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
@@ -87,6 +88,7 @@ type ServerCallbacks interface {
 	RemoveProvider(ctx context.Context, provider schemas.ModelProvider) error
 	ReloadRoutingRule(ctx context.Context, id string) error
 	RemoveRoutingRule(ctx context.Context, id string) error
+	ReloadComplexityTierBoundaries(ctx context.Context, boundaries *configstore.ComplexityTierBoundaries) error
 	// MCP related callbacks
 	AddMCPClient(ctx context.Context, clientConfig *schemas.MCPClientConfig) error
 	RemoveMCPClient(ctx context.Context, id string) error
@@ -681,6 +683,27 @@ func (s *BifrostHTTPServer) RemoveRoutingRule(ctx context.Context, id string) er
 	if err := store.DeleteRoutingRuleInMemory(id); err != nil {
 		return fmt.Errorf("failed to delete routing rule from store: %w", err)
 	}
+	return nil
+}
+
+// ReloadComplexityTierBoundaries swaps the governance plugin's complexity analyzer
+// with new tier boundaries.
+func (s *BifrostHTTPServer) ReloadComplexityTierBoundaries(ctx context.Context, boundaries *configstore.ComplexityTierBoundaries) error {
+	governancePlugin, err := s.getGovernancePlugin()
+	if err != nil {
+		return err
+	}
+
+	var tb *complexity.TierBoundaries
+	if boundaries != nil {
+		tb = &complexity.TierBoundaries{
+			SimpleMedium:     boundaries.SimpleMedium,
+			MediumComplex:    boundaries.MediumComplex,
+			ComplexReasoning: boundaries.ComplexReasoning,
+		}
+	}
+
+	governancePlugin.ReloadComplexityTierBoundaries(tb)
 	return nil
 }
 

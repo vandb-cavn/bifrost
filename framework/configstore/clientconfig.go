@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"sort"
 	"strconv"
@@ -1214,14 +1215,34 @@ type ConfigMap map[schemas.ModelProvider]ProviderConfig
 // GovernanceConfig contains governance entities loaded from the config store or
 // reconciled from config.json.
 type GovernanceConfig struct {
-	VirtualKeys      []tables.TableVirtualKey      `json:"virtual_keys"`
-	Teams            []tables.TableTeam            `json:"teams"`
-	Customers        []tables.TableCustomer        `json:"customers"`
-	Budgets          []tables.TableBudget          `json:"budgets"`
-	RateLimits       []tables.TableRateLimit       `json:"rate_limits"`
-	ModelConfigs     []tables.TableModelConfig     `json:"model_configs"`
-	Providers        []tables.TableProvider        `json:"providers"`
-	RoutingRules     []tables.TableRoutingRule     `json:"routing_rules"`
+	VirtualKeys          []tables.TableVirtualKey      `json:"virtual_keys"`
+	Teams                []tables.TableTeam            `json:"teams"`
+	Customers            []tables.TableCustomer        `json:"customers"`
+	Budgets              []tables.TableBudget          `json:"budgets"`
+	RateLimits           []tables.TableRateLimit       `json:"rate_limits"`
+	ModelConfigs         []tables.TableModelConfig     `json:"model_configs"`
+	Providers            []tables.TableProvider        `json:"providers"`
+	RoutingRules         []tables.TableRoutingRule     `json:"routing_rules"`
 	PricingOverrides []tables.TablePricingOverride `json:"pricing_overrides,omitempty"`
-	AuthConfig       *AuthConfig                   `json:"auth_config,omitempty"`
+	AuthConfig           *AuthConfig                   `json:"auth_config,omitempty"`
+	ComplexityTierBoundaries *ComplexityTierBoundaries `json:"complexity_tier_boundaries,omitempty"`
+}
+
+// ComplexityTierBoundaries defines the score thresholds for tier classification.
+type ComplexityTierBoundaries struct {
+	SimpleMedium     float64 `json:"simple_medium"`
+	MediumComplex    float64 `json:"medium_complex"`
+	ComplexReasoning float64 `json:"complex_reasoning"`
+}
+
+// Validate checks that tier boundaries satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.
+func (b *ComplexityTierBoundaries) Validate() error {
+	if !(0 < b.SimpleMedium &&
+		b.SimpleMedium < b.MediumComplex &&
+		b.MediumComplex < b.ComplexReasoning &&
+		b.ComplexReasoning < 1) {
+		return fmt.Errorf("tier boundaries must satisfy 0 < simple_medium (%.4f) < medium_complex (%.4f) < complex_reasoning (%.4f) < 1",
+			b.SimpleMedium, b.MediumComplex, b.ComplexReasoning)
+	}
+	return nil
 }

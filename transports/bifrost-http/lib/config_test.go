@@ -386,6 +386,7 @@ type MockConfigStore struct {
 	providers        map[schemas.ModelProvider]configstore.ProviderConfig
 	mcpConfig        *schemas.MCPConfig
 	governanceConfig *configstore.GovernanceConfig
+	complexityTierBoundaries *configstore.ComplexityTierBoundaries
 	authConfig       *configstore.AuthConfig
 	frameworkConfig  *tables.TableFrameworkConfig
 	vectorConfig     *vectorstore.Config
@@ -621,7 +622,33 @@ func (m *MockConfigStore) DeleteMCPClientConfig(ctx context.Context, id string) 
 
 // Governance config
 func (m *MockConfigStore) GetGovernanceConfig(ctx context.Context) (*configstore.GovernanceConfig, error) {
+	if m.governanceConfig == nil && m.complexityTierBoundaries != nil {
+		m.governanceConfig = &configstore.GovernanceConfig{}
+	}
+	if m.governanceConfig != nil {
+		m.governanceConfig.ComplexityTierBoundaries = m.complexityTierBoundaries
+	}
 	return m.governanceConfig, nil
+}
+
+func (m *MockConfigStore) GetComplexityTierBoundaries(ctx context.Context) (*configstore.ComplexityTierBoundaries, error) {
+	if m.complexityTierBoundaries == nil {
+		return nil, nil
+	}
+	b := *m.complexityTierBoundaries
+	return &b, nil
+}
+
+func (m *MockConfigStore) UpdateComplexityTierBoundaries(ctx context.Context, b *configstore.ComplexityTierBoundaries) error {
+	if b != nil {
+		copy := *b
+		m.complexityTierBoundaries = &copy
+	}
+	if m.governanceConfig == nil {
+		m.governanceConfig = &configstore.GovernanceConfig{}
+	}
+	m.governanceConfig.ComplexityTierBoundaries = m.complexityTierBoundaries
+	return nil
 }
 
 func (m *MockConfigStore) CreateBudget(ctx context.Context, budget *tables.TableBudget, tx ...*gorm.DB) error {
@@ -12518,6 +12545,116 @@ func TestGenerateClientConfigHash(t *testing.T) {
 // ===================================================================================
 // COMBINED GOVERNANCE RECONCILIATION TEST
 // ===================================================================================
+
+func TestSQLite_ComplexityTierBoundaries_FileSeeded(t *testing.T) {
+	initTestLogger()
+	tempDir := createTempDir(t)
+
+	configData := makeConfigDataWithProvidersAndDir(nil, tempDir)
+	configData.Governance = &configstore.GovernanceConfig{
+		ComplexityTierBoundaries: &configstore.ComplexityTierBoundaries{
+			SimpleMedium:     0.15,
+			MediumComplex:    0.35,
+			ComplexReasoning: 0.60,
+		},
+	}
+	createConfigFile(t, tempDir, configData)
+
+	ctx := context.Background()
+	config, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+	defer config.Close(ctx)
+
+	require.NotNil(t, config.GovernanceConfig)
+	require.NotNil(t, config.GovernanceConfig.ComplexityTierBoundaries)
+	require.Equal(t, 0.15, config.GovernanceConfig.ComplexityTierBoundaries.SimpleMedium)
+	require.Equal(t, 0.35, config.GovernanceConfig.ComplexityTierBoundaries.MediumComplex)
+	require.Equal(t, 0.60, config.GovernanceConfig.ComplexityTierBoundaries.ComplexReasoning)
+
+	stored, err := config.ConfigStore.GetComplexityTierBoundaries(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.Equal(t, 0.15, stored.SimpleMedium)
+}
+
+func TestSQLite_ComplexityTierBoundaries_UpdatePersists(t *testing.T) {
+	initTestLogger()
+	tempDir := createTempDir(t)
+
+	// No tier boundaries in the file — API-only update path
+	configData := makeConfigDataWithProvidersAndDir(nil, tempDir)
+	createConfigFile(t, tempDir, configData)
+
+	ctx := context.Background()
+	config1, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+
+	require.NoError(t, config1.ConfigStore.UpdateComplexityTierBoundaries(ctx, &configstore.ComplexityTierBoundaries{
+		SimpleMedium:     0.20,
+		MediumComplex:    0.40,
+		ComplexReasoning: 0.70,
+	}))
+	config1.Close(ctx)
+
+	config2, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+	defer config2.Close(ctx)
+
+	stored, err := config2.ConfigStore.GetComplexityTierBoundaries(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.Equal(t, 0.20, stored.SimpleMedium)
+	require.Equal(t, 0.40, stored.MediumComplex)
+	require.Equal(t, 0.70, stored.ComplexReasoning)
+}
+
+func TestSQLite_ComplexityTierBoundaries_DBWinsAfterSeed(t *testing.T) {
+	initTestLogger()
+	tempDir := createTempDir(t)
+
+	// Step 1: Boot with file boundaries — seeds DB
+	configData := makeConfigDataWithProvidersAndDir(nil, tempDir)
+	configData.Governance = &configstore.GovernanceConfig{
+		ComplexityTierBoundaries: &configstore.ComplexityTierBoundaries{
+			SimpleMedium:     0.15,
+			MediumComplex:    0.35,
+			ComplexReasoning: 0.60,
+		},
+	}
+	createConfigFile(t, tempDir, configData)
+
+	ctx := context.Background()
+	config1, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+
+	stored, err := config1.ConfigStore.GetComplexityTierBoundaries(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, stored, "DB should be seeded from file")
+	require.Equal(t, 0.15, stored.SimpleMedium)
+
+	// Step 2: Edit via API (simulates PUT endpoint)
+	require.NoError(t, config1.ConfigStore.UpdateComplexityTierBoundaries(ctx, &configstore.ComplexityTierBoundaries{
+		SimpleMedium:     0.20,
+		MediumComplex:    0.45,
+		ComplexReasoning: 0.75,
+	}))
+	config1.Close(ctx)
+
+	// Step 3: Restart with same file still present — DB should win
+	config2, err := LoadConfig(ctx, tempDir)
+	require.NoError(t, err)
+	defer config2.Close(ctx)
+
+	require.NotNil(t, config2.GovernanceConfig)
+	require.NotNil(t, config2.GovernanceConfig.ComplexityTierBoundaries)
+	require.Equal(t, 0.20, config2.GovernanceConfig.ComplexityTierBoundaries.SimpleMedium, "DB-edited value should survive restart")
+	require.Equal(t, 0.45, config2.GovernanceConfig.ComplexityTierBoundaries.MediumComplex)
+	require.Equal(t, 0.75, config2.GovernanceConfig.ComplexityTierBoundaries.ComplexReasoning)
+
+	reloaded, err := config2.ConfigStore.GetComplexityTierBoundaries(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 0.20, reloaded.SimpleMedium, "DB should not be overwritten by file")
+}
 
 // TestSQLite_Governance_FullReconciliation tests full governance reconciliation
 func TestSQLite_Governance_FullReconciliation(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/cel-go/cel"
+	"github.com/maximhq/bifrost/core/complexity"
 	"github.com/maximhq/bifrost/core/schemas"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 )
@@ -46,14 +47,16 @@ type RoutingDecision struct {
 // RoutingContext holds all data needed for routing rule evaluation
 // Reuses existing configstore table types for VirtualKey, Team, Customer
 type RoutingContext struct {
-	VirtualKey               *configstoreTables.TableVirtualKey // nil if no VK
-	Provider                 schemas.ModelProvider              // Current provider
-	Model                    string                             // Current model
-	RequestType              string                             // Normalized request type (e.g., "chat_completion", "embedding") from HTTP context
-	Fallbacks                []string                           // Fallback chain: ["provider/model", ...]
-	Headers                  map[string]string                  // Request headers for dynamic routing
-	QueryParams              map[string]string                  // Query parameters for dynamic routing
-	BudgetAndRateLimitStatus *BudgetAndRateLimitStatus          // Budget and rate limit status by provider/model
+	VirtualKey               *configstoreTables.TableVirtualKey  // nil if no VK
+	Provider                 schemas.ModelProvider               // Current provider
+	Model                    string                              // Current model
+	RequestType              string                              // Normalized request type (e.g., "chat_completion", "embedding") from HTTP context
+	Fallbacks                []string                            // Fallback chain: ["provider/model", ...]
+	Headers                  map[string]string                   // Request headers for dynamic routing
+	QueryParams              map[string]string                   // Query parameters for dynamic routing
+	BudgetAndRateLimitStatus *BudgetAndRateLimitStatus           // Budget and rate limit status by provider/model
+	Complexity               *complexity.ComplexityResult        // Complexity analysis result (nil if disabled or unsupported request type)
+	computeComplexity        func() *complexity.ComplexityResult // Lazy complexity computation; called at most once when a rule references "complexity_tier"
 }
 
 type RoutingEngine struct {
@@ -166,6 +169,15 @@ func (re *RoutingEngine) EvaluateRoutingRules(ctx *schemas.BifrostContext, routi
 
 			for _, rule := range rules {
 				re.logger.Debug("[RoutingEngine] Evaluating rule: name=%s, expression=%s", rule.Name, rule.CelExpression)
+
+				// Lazy complexity: compute only when a rule references complexity and it hasn't been computed yet
+				if routingCtx.Complexity == nil && routingCtx.computeComplexity != nil && strings.Contains(rule.CelExpression, "complexity_tier") {
+					routingCtx.Complexity = routingCtx.computeComplexity()
+					routingCtx.computeComplexity = nil // compute at most once
+					if routingCtx.Complexity != nil {
+						variables["complexity_tier"] = routingCtx.Complexity.Tier
+					}
+				}
 
 				program, err := re.store.GetRoutingProgram(rule)
 				if err != nil {
@@ -466,6 +478,14 @@ func extractRoutingVariables(ctx *RoutingContext) (map[string]interface{}, error
 		variables["request"] = 0.0
 	}
 
+	// Populate complexity tier for CEL routing rules.
+	// Empty string when complexity analysis is unavailable (e.g. non-text requests).
+	if ctx.Complexity != nil {
+		variables["complexity_tier"] = ctx.Complexity.Tier
+	} else {
+		variables["complexity_tier"] = ""
+	}
+
 	return variables, nil
 }
 
@@ -552,5 +572,8 @@ func createCELEnvironment() (*cel.Env, error) {
 		cel.Variable("tokens_used", cel.DoubleType),
 		cel.Variable("request", cel.DoubleType),
 		cel.Variable("budget_used", cel.DoubleType),
+
+		// Complexity tier (empty string when unavailable, e.g. non-text requests)
+		cel.Variable("complexity_tier", cel.StringType),
 	)
 }

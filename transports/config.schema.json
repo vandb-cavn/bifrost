@@ -639,6 +639,32 @@
               "name"
             ]
           }
+        },
+        "complexity_tier_boundaries": {
+          "type": "object",
+          "description": "Score thresholds for complexity tier classification (all values between 0 and 1)",
+          "properties": {
+            "simple_medium": {
+              "type": "number",
+              "description": "Score boundary between SIMPLE and MEDIUM tiers",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "medium_complex": {
+              "type": "number",
+              "description": "Score boundary between MEDIUM and COMPLEX tiers",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            },
+            "complex_reasoning": {
+              "type": "number",
+              "description": "Score boundary between COMPLEX and REASONING tiers",
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1
+            }
+          },
+          "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

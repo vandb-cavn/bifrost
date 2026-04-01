@@ -27,12 +27,15 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		&tables.TableKey{},
 		&tables.TableBudget{},
 		&tables.TableRateLimit{},
+		&tables.TableModelConfig{},
 		&tables.TableVirtualKey{},
 		&tables.TableVirtualKeyProviderConfig{},
 		&tables.TableVirtualKeyProviderConfigKey{},
 		&tables.TableCustomer{},
 		&tables.TableTeam{},
+		&tables.TableRoutingRule{},
 		&tables.TableClientConfig{},
+		&tables.TableGovernanceConfig{},
 		&tables.TablePlugin{},
 		&tables.TableMCPClient{},
 		&tables.TableVirtualKeyMCPConfig{},
@@ -57,6 +60,45 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		db:     db,
 		logger: nil,
 	}
+}
+
+func TestComplexityTierBoundariesRoundTrip(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	original := &ComplexityTierBoundaries{
+		SimpleMedium:     0.20,
+		MediumComplex:    0.40,
+		ComplexReasoning: 0.70,
+	}
+
+	err := store.UpdateComplexityTierBoundaries(ctx, original)
+	require.NoError(t, err)
+
+	loaded, err := store.GetComplexityTierBoundaries(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, original, loaded)
+}
+
+func TestGetGovernanceConfig_IncludesComplexityTierBoundaries(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	err := store.UpdateComplexityTierBoundaries(ctx, &ComplexityTierBoundaries{
+		SimpleMedium:     0.10,
+		MediumComplex:    0.30,
+		ComplexReasoning: 0.55,
+	})
+	require.NoError(t, err)
+
+	governanceConfig, err := store.GetGovernanceConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, governanceConfig)
+	require.NotNil(t, governanceConfig.ComplexityTierBoundaries)
+	assert.Equal(t, 0.10, governanceConfig.ComplexityTierBoundaries.SimpleMedium)
+	assert.Equal(t, 0.30, governanceConfig.ComplexityTierBoundaries.MediumComplex)
+	assert.Equal(t, 0.55, governanceConfig.ComplexityTierBoundaries.ComplexReasoning)
 }
 
 // =============================================================================

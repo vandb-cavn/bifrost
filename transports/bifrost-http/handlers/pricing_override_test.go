@@ -65,6 +65,9 @@ func (pricingOverrideTestGovernanceManager) UpsertPricingOverride(context.Contex
 func (pricingOverrideTestGovernanceManager) DeletePricingOverride(context.Context, string) error {
 	return nil
 }
+func (pricingOverrideTestGovernanceManager) ReloadComplexityTierBoundaries(context.Context, *configstore.ComplexityTierBoundaries) error {
+	return nil
+}
 
 func setupPricingOverrideHandlerStore(t *testing.T) configstore.ConfigStore {
 	t.Helper()

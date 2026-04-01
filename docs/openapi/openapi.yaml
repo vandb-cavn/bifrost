@@ -711,6 +711,10 @@ paths:
   /api/governance/pricing-overrides/{id}:
     $ref: './paths/management/governance.yaml#/pricing-overrides-by-id'
 
+  # Governance - Complexity Tier Boundaries
+  /api/governance/complexity-tier-boundaries:
+    $ref: './paths/management/governance.yaml#/complexity-tier-boundaries'
+
   # Logging
   /api/logs:
     $ref: './paths/management/logging.yaml#/logs'
