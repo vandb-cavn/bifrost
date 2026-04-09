@@ -119,6 +119,8 @@ type Log struct {
 	RoutingEnginesUsedStr   *string   `gorm:"type:varchar(255);column:routing_engines_used" json:"-"` // Comma-separated routing engines
 	RoutingRuleID           *string   `gorm:"type:varchar(255);index:idx_logs_routing_rule_id" json:"routing_rule_id"`
 	RoutingRuleName         *string   `gorm:"type:varchar(255)" json:"routing_rule_name"`
+	SelectedPromptName      string    `gorm:"type:varchar(255)" json:"selected_prompt_name,omitempty"`
+	SelectedPromptVersion   string    `gorm:"type:varchar(64)" json:"selected_prompt_version,omitempty"`
 	UserID                  *string   `gorm:"type:varchar(255);index:idx_logs_user_id" json:"user_id"`
 	TeamID                  *string   `gorm:"type:varchar(255);index:idx_logs_team_id" json:"team_id"`
 	TeamName                *string   `gorm:"type:varchar(255)" json:"team_name"`

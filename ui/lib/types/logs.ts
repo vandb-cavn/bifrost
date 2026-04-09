@@ -464,6 +464,8 @@ export interface LogEntry {
 	routing_rule_id?: string;
 	routing_engine_logs?: string; // Human-readable routing decision logs
 	plugin_logs?: string; // JSON string of plugin execution logs grouped by plugin name
+	selected_prompt_name?: string; // Resolved prompt display name (prompts plugin)
+	selected_prompt_version?: string; // Resolved prompt version number as string (prompts plugin)
 	selected_key?: DBKey;
 	virtual_key?: VirtualKey;
 	routing_rule?: RoutingRule;

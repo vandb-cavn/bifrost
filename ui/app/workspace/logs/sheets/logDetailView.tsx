@@ -279,6 +279,19 @@ export function LogDetailView({
 							/>
 						)}
 						{log.selected_key && <LogEntryDetailsView className="w-full" label="Selected Key" value={log.selected_key.name} />}
+						{(log.selected_prompt_name || log.selected_prompt_version) && (
+							<LogEntryDetailsView
+								className="w-full"
+								label="Selected Prompt"
+								value={
+									<span className="break-words">
+										{log.selected_prompt_name ?? ""}
+										{log.selected_prompt_name && log.selected_prompt_version ? " · " : ""}
+										{log.selected_prompt_version ? <>v{log.selected_prompt_version}</> : null}
+									</span>
+								}
+							/>
+						)}
 						{log.number_of_retries > 0 && (
 							<LogEntryDetailsView className="w-full" label="Number of Retries" value={log.number_of_retries} />
 						)}
