@@ -111,7 +111,7 @@ func TestBuildTags(t *testing.T) {
 		Status:        "success",
 		Object:        "chat.completion",
 		VirtualKeyID:  &vkID,
-		SelectedKeyID: "sk_789",
+		SelectedKeyID: new("sk_789"),
 		RoutingRuleID: &rrID,
 		Stream:        true,
 		Timestamp:     time.Date(2026, 4, 3, 14, 0, 0, 0, time.UTC),
