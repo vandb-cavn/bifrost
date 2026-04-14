@@ -1,0 +1,1 @@
+- fix: gemini preserves thinkingLevel parameters during round-trip and finish reason mapping
