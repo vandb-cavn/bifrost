@@ -94,7 +94,7 @@ Stream cursor stored under a stable key:
 bifrost:consumer:{consumerID}:last_seen    → last processed stream entry ID
 ```
 
-On startup, the node reads `bifrost:consumer:{consumerID}:last_seen` to resume from the correct position. A brand-new consumer with no cursor starts from `"$"` (read only new events) after first performing a full Postgres reload.
+On startup, the node reads `bifrost:consumer:{consumerID}:last_seen` to resume from the correct position. A brand-new consumer with no cursor performs a **watermark-first full reload** (see below) to avoid a race window.
 
 ### Event schema
 
@@ -164,19 +164,56 @@ Each ConfigStore write method (whether called inside a transaction or as a stand
 ### Reconnect and catch-up flow
 
 ```
-On Redis reconnect:
+On Redis reconnect (or first start):
   1. Read bifrost:consumer:{consumerID}:last_seen from Redis
-     (or fall back to last value held in local memory if Redis just restarted)
-  2. XREAD COUNT 1000 BLOCK 0 STREAMS bifrost:config:events {last_seen_id}
-  3. Process entries in order; write lastSeenID to Redis after each batch
-  4. If last_seen_id is older than oldest entry in stream (gap/trim):
-     → Full Postgres reload: reload entire in-memory state from DB
-     → Set lastSeenID to current stream tip ("$")
-  5. Resume normal blocking XREAD loop
+     (or local memory fallback if Redis just restarted)
+  2. If last_seen_id exists:
+     a. XREAD COUNT 1000 STREAMS bifrost:config:events {last_seen_id}
+     b. If entries returned: process in order, update last_seen_id after each batch, repeat
+     c. If XREAD returns empty (caught up): switch to blocking XREAD loop — done
+     d. If last_seen_id is older than oldest entry in stream (gap/trim):
+        → trigger watermark-first full reload (see below), then resume blocking XREAD
+  3. If no last_seen_id (first start of this consumer identity):
+     → trigger watermark-first full reload (see below), then resume blocking XREAD
+```
+
+### Watermark-first full reload
+
+Used on first start or when stream gap makes catch-up impossible. The ordering prevents a race window where events committed after the Postgres snapshot would be missed by both the snapshot and the stream cursor.
+
+```
+1. XREVRANGE bifrost:config:events + - COUNT 1 → capture watermark W
+2. Call server.FullReload(ctx) — reload all runtime state from Postgres (see below)
+3. Persist W as last_seen_id: SET bifrost:consumer:{consumerID}:last_seen W
+4. Start blocking XREAD from W
+```
+
+Any event committed to Postgres before step 2 is captured by the full reload.
+Any event committed after W (captured in step 1) appears in the stream with ID > W and is caught by XREAD in step 4.
+No event falls through the gap between the snapshot and the stream cursor.
+
+### `server.FullReload(ctx)`
+
+A new server-layer method that reloads all runtime state from Postgres in a fixed, deterministic order. Must be **idempotent** — calling it multiple times produces the same in-memory state as calling it once.
+
+Reload order (dependencies first):
+
+```
+1. ReloadClientConfigFromConfigStore(ctx)     — global settings, TLS, auth
+2. For each provider: ReloadProvider(ctx, id) — providers + model catalog sync
+3. For each model config: ReloadModelConfig(ctx, id)
+4. For each virtual key: ReloadVirtualKey(ctx, id)  ┐
+   For each team: ReloadTeam(ctx, id)                │ governance state
+   For each customer: ReloadCustomer(ctx, id)        │
+   For each routing rule: ReloadRoutingRule(ctx, id) ┘
+5. For each MCP client: ReconnectMCPClient(ctx, id)
+6. Plugins: reload only if plugin config has changed since last load
+             (plugins carry side effects; unconditional reload is avoided)
 ```
 
 Full reload is also triggered when:
 - No `last_seen_id` exists (first start of this consumer identity)
+- Stream gap detected (last_seen_id older than oldest stream entry)
 - Redis cluster rebalance wipes the stream
 
 ### Reload dispatch table (server-layer entry points)
@@ -363,25 +400,28 @@ The last-writer overwrites the others' contributions, silently undercounting.
 
 ### Recovery procedure (per node, on Redis reconnect)
 
+**Do not force-dump to Postgres before the Lua merge.** If this node dumps first, the Postgres baseline would already include this node's outage delta; adding `localDelta` again via `INCRBY` would double-count it.
+
 ```
 For each rateLimitID and budgetID tracked locally:
 
-  1. Compute localDelta:
-       localDelta = inMemoryValue - lastDumpedToPostgresValue
-     (tracked by the existing LastDBUsages* maps in LocalGovernanceStore)
+  1. Compute localDelta (before any dump):
+       localDelta = inMemoryValue - LastDBUsages[id]
+     LastDBUsages* maps in LocalGovernanceStore track the last value written
+     to Postgres by this node. This is the outage-period contribution of this node only.
 
-  2. Force a Postgres dump of current sync.Map state:
-       DumpRateLimits(ctx, nil, nil)
-       DumpBudgets(ctx, nil)
-     This writes the outage-period delta to Postgres immediately.
+  2. Read postgres_baseline directly from Postgres (stale — this is correct):
+       postgres_baseline = current value in Postgres for this counter
+     This value reflects the last successful dump before or during the outage.
+     Do NOT refresh it with a forced dump first.
 
-  3. For each counter key, run an atomic Lua script:
+  3. Run atomic Lua merge script per counter key:
 ```
 
 ```lua
 -- KEYS[1] = counter key (e.g. bifrost:rl:{id}:tokens)
--- ARGV[1] = postgres_baseline (read fresh from Postgres after step 2)
--- ARGV[2] = local_delta (inMemory - lastDumped, computed in step 1)
+-- ARGV[1] = postgres_baseline (stale Postgres value, read in step 2)
+-- ARGV[2] = local_delta (this node's outage-period contribution, computed in step 1)
 if redis.call('EXISTS', KEYS[1]) == 0 then
     redis.call('SET', KEYS[1], ARGV[1])   -- initialize from Postgres baseline
 end
@@ -390,19 +430,24 @@ return redis.call('GET', KEYS[1])
 ```
 
 ```
-  Result: if Redis key didn't exist, it is initialized to postgres_baseline + localDelta.
-  If another node already initialized it, localDelta is added atomically on top.
-  All nodes' outage contributions accumulate correctly — no contribution is lost.
+  4. Only after ALL counter merges succeed:
+     set redisAvailable = true → switch reads/writes to Redis path.
+     If any merge fails: stay in degraded local mode (redisAvailable = false),
+     retry after backoff. Do not switch to Redis-read path with a partially
+     merged state — that would produce wrong check results.
+
+  5. After switching to Redis path, the next periodic DumpRateLimits/DumpBudgets
+     will sync the merged Redis values back to Postgres. No manual dump needed.
 ```
 
 ### Why this works with concurrent nodes
 
-Multiple nodes calling the Lua script concurrently produce a correct result:
-- First node: initializes key to `postgresBaseline`, then adds its `localDelta`
-- Subsequent nodes: key already exists, skip SET, just add their `localDelta`
-- Final value: `postgresBaseline + sum(all nodes' localDeltas)` = cluster-wide usage
+Multiple nodes calling the Lua script independently produce a correct result:
+- First node: Redis key does not exist → `SET postgres_baseline` → `INCRBY localDelta_A`
+- Second node: Redis key exists → skip SET → `INCRBY localDelta_B`
+- Final value: `postgres_baseline + localDelta_A + localDelta_B` = cluster-wide usage ✓
 
-The Postgres baseline is read after the forced dump (step 2), so it includes this node's contribution. `localDelta` is the residual not yet in Postgres. No usage is double-counted.
+`postgres_baseline` is the cluster's last-known-good value before the outage. Each `localDelta` is exactly one node's contribution during the outage. No contribution is double-counted because `localDelta` is computed from `LastDBUsages` (what was in Postgres before this node started accumulating locally), not from the current Postgres value.
 
 ### TTL on recovery
 
@@ -484,14 +529,18 @@ if cfg.ClusterMode {
 
 3. If cluster.redis configured:
    a. Connect Redis
-   b. Read bifrost:consumer:{consumerID}:last_seen from Redis
-   c. If no cursor found (first start):
-      - Full Postgres reload of governance state
-      - Set cursor to "$" (consume only new events going forward)
-   d. Start XREAD consumer goroutine from last_seen cursor
-   e. Run recovery bootstrap for all counters:
-      - Force DumpRateLimits + DumpBudgets to Postgres
-      - Run per-counter Lua merge script (postgres_baseline + localDelta)
+   b. Run counter recovery merge:
+      - For each counter: compute localDelta = inMemory - LastDBUsages[id]
+      - Read postgres_baseline from Postgres (stale, no forced dump)
+      - Run Lua merge script per counter
+      - Only on full success: set redisAvailable = true
+      - On any failure: stay in degraded local mode, skip step (c)
+   c. If redisAvailable:
+      - Read bifrost:consumer:{consumerID}:last_seen from Redis
+      - If cursor found: begin catch-up XREAD from that cursor
+      - If no cursor (first start) or stream gap detected:
+        run watermark-first full reload → server.FullReload(ctx) → XREAD from watermark
+      - Start blocking XREAD consumer goroutine
 
 4. Start serving requests
 ```
@@ -504,7 +553,7 @@ if cfg.ClusterMode {
 |----------|----------|
 | Redis down at startup | Log warning, start in single-node mode |
 | Redis down mid-run | `atomic.Bool redisAvailable = false` → switch all reads/writes to local sync.Map |
-| Redis recovers | Force dump local state to Postgres → run Lua merge script per counter → resume XREAD from last cursor; if stream gap → full Postgres resync |
+| Redis recovers | Run Lua merge (stale Postgres baseline + localDelta, no forced dump); only set `redisAvailable = true` after all merges succeed; if any merge fails → stay in degraded mode; if stream gap → watermark-first full reload via `server.FullReload` |
 | Postgres down | Redis serves rate limit + budget checks; config mutations fail (existing behavior) |
 | Network partition between nodes | Each node uses local Redis data; converges when partition heals |
 
@@ -525,8 +574,12 @@ Mode switching uses `atomic.Bool redisAvailable` — no restart needed.
 - `TestConsumerCursor_Durable` — cursor persisted to `bifrost:consumer:{consumerID}:last_seen`, survives reconnect
 - `TestRateLimitINCRBY_Concurrent` — 100 goroutines increment concurrently, verify atomic correctness
 - `TestBudgetCheck_SubSecondWindow` — budget reached; subsequent requests see updated Redis counter
-- `TestRecoveryMerge_Lua` — verify Lua script correctly merges postgres_baseline + localDelta across concurrent callers
-- `TestRecoveryMerge_MultiNode` — two concurrent callers with different deltas produce correct sum
+- `TestRecoveryMerge_Lua` — verify Lua script: first node initializes, second node adds delta; final = baseline + delta_A + delta_B
+- `TestRecoveryMerge_NoDoublCount` — forced dump before merge is NOT done; localDelta = inMemory - LastDBUsages (not from fresh Postgres)
+- `TestRecoveryMerge_PartialFailure` — if any counter merge fails, redisAvailable stays false; reads remain on local sync.Map
+- `TestFullReload_Idempotent` — calling server.FullReload(ctx) twice produces identical in-memory state
+- `TestFullReload_Order` — verify reload order: client config → providers → governance → MCP → plugins
+- `TestWatermarkFirstReload_NoGap` — events committed after watermark W appear in stream and are caught by XREAD from W
 
 ### Integration tests (real Redis + Postgres, added to `make test-plugins`)
 
@@ -554,7 +607,7 @@ Uses `miniredis` for unit tests; real Redis (via Docker Compose) for integration
 | `plugins/governance/store.go` | Update Check functions to read Redis; Update functions to write INCRBY/INCRBYFLOAT to Redis; add Lua recovery merge |
 | `plugins/governance/tracker.go` | Update `DumpRateLimits`/`DumpBudgets` to read from Redis; add forced-dump path for recovery |
 | `plugins/governance/multinode_test.go` | New: multi-node integration tests |
-| `transports/bifrost-http/server/server.go` | Add XREAD consumer goroutine; wire `PublishingConfigStore` at startup; add `ClusterSyncer` and `consumerID` to server; add recovery bootstrap sequence |
+| `transports/bifrost-http/server/server.go` | Add `FullReload(ctx)` (idempotent, ordered); add XREAD consumer goroutine with watermark-first reload; wire `PublishingConfigStore` at startup; add `ClusterSyncer` and `consumerID` to server; add recovery bootstrap sequence |
 | `transports/bifrost-http/lib/config.go` | Accept `PublishingConfigStore` instead of raw `ConfigStore`; remove any remaining manual publish calls |
 | `examples/configs/withmultinode/config.json` | New example config |
 | `docs/features/multi-node.mdx` | New: user-facing documentation |
