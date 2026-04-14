@@ -1642,6 +1642,24 @@
     },
     "websocket": {
       "$ref": "#/$defs/websocket_config"
+    },
+    "guardrails_config": {
+      "$ref": "#/$defs/guardrails_config"
+    },
+    "audit_logs": {
+      "$ref": "#/$defs/audit_logs_config"
+    },
+    "cluster_config": {
+      "$ref": "#/$defs/cluster_config"
+    },
+    "saml_config": {
+      "$ref": "#/$defs/saml_config"
+    },
+    "load_balancer_config": {
+      "$ref": "#/$defs/load_balancer_config"
+    },
+    "large_payload_optimization": {
+      "$ref": "#/$defs/large_payload_optimization"
     }
   },
   "additionalProperties": false,
@@ -3273,9 +3291,8 @@
               "description": "Port to bind for cluster communication"
             },
             "dial_timeout": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Timeout for discovery dial operations in nanoseconds"
+              "type": "string",
+              "description": "Timeout for discovery dial operations as a Go duration string (e.g. '5s', '1m')"
             },
             "allowed_address_space": {
               "type": "array",
