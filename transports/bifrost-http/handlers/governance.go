@@ -539,12 +539,6 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 		}
 		if req.ProviderConfigs != nil {
 			for _, pc := range req.ProviderConfigs {
-				if err := pc.AllowedModels.Validate(); err != nil {
-					return &badRequestError{err: fmt.Errorf("invalid allowed_models for provider %s: %w", pc.Provider, err)}
-				}
-				if err := pc.KeyIDs.Validate(); err != nil {
-					return &badRequestError{err: fmt.Errorf("invalid key_ids for provider %s: %w", pc.Provider, err)}
-				}
 				providerName := schemas.ModelProvider(strings.TrimSpace(pc.Provider))
 				if providerName == "" {
 					return &badRequestError{err: fmt.Errorf("provider name is required")}
@@ -552,6 +546,13 @@ func (h *GovernanceHandler) createVirtualKey(ctx *fasthttp.RequestCtx) {
 				if _, ok := providerSet[providerName]; !ok {
 					return &badRequestError{err: fmt.Errorf("invalid provider name: %s", pc.Provider)}
 				}
+				if err := pc.AllowedModels.Validate(); err != nil {
+					return &badRequestError{err: fmt.Errorf("invalid allowed_models for provider %s: %w", pc.Provider, err)}
+				}
+				if err := pc.KeyIDs.Validate(); err != nil {
+					return &badRequestError{err: fmt.Errorf("invalid key_ids for provider %s: %w", pc.Provider, err)}
+				}
+
 				// Get keys for this provider config if specified
 				var keys []configstoreTables.TableKey
 				allowAllKeys := false
