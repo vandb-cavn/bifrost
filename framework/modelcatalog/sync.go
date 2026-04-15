@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,28 +48,36 @@ func (mc *ModelCatalog) syncPricing(ctx context.Context) error {
 		}
 	}
 
+	// Deduplicate pricing rows, then upsert in deterministic lock order (same rationale as
+	// syncModelParameters: map iteration is random; concurrent multi-node sync can deadlock on Postgres).
+	modelKeys := make([]string, 0, len(pricingData))
+	for k := range pricingData {
+		modelKeys = append(modelKeys, k)
+	}
+	slices.Sort(modelKeys)
+	seen := make(map[string]bool)
+	var pricingRows []configstoreTables.TableModelPricing
+	for _, modelKey := range modelKeys {
+		entry := pricingData[modelKey]
+		pricing := convertPricingDataToTableModelPricing(modelKey, entry)
+		key := makeKey(pricing.Model, pricing.Provider, pricing.Mode)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		pricingRows = append(pricingRows, pricing)
+	}
+	slices.SortFunc(pricingRows, func(a, b configstoreTables.TableModelPricing) int {
+		return strings.Compare(makeKey(a.Model, a.Provider, a.Mode), makeKey(b.Model, b.Provider, b.Mode))
+	})
+
 	// Update database in transaction
 	err = mc.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
-		// Deduplicate and insert new pricing data
-		seen := make(map[string]bool)
-		for modelKey, entry := range pricingData {
-			pricing := convertPricingDataToTableModelPricing(modelKey, entry)
-			// Create composite key for deduplication
-			key := makeKey(pricing.Model, pricing.Provider, pricing.Mode)
-			// Skip if already seen
-			if exists, ok := seen[key]; ok && exists {
-				continue
-			}
-			// Mark as seen
-			seen[key] = true
-			if err := mc.configStore.UpsertModelPrices(ctx, &pricing, tx); err != nil {
-				return fmt.Errorf("failed to create pricing record for model %s: %w", pricing.Model, err)
+		for i := range pricingRows {
+			if err := mc.configStore.UpsertModelPrices(ctx, &pricingRows[i], tx); err != nil {
+				return fmt.Errorf("failed to create pricing record for model %s: %w", pricingRows[i].Model, err)
 			}
 		}
-
-		// Clear seen map
-		seen = nil
-
 		return nil
 	})
 	if err != nil {
@@ -448,8 +457,16 @@ func (mc *ModelCatalog) syncModelParameters(ctx context.Context) error {
 
 	// Persist to database if config store is available
 	if mc.configStore != nil {
+		// Deterministic row lock order: map iteration is random in Go; concurrent FullReload /
+		// syncs on multiple nodes must upsert in the same order or PostgreSQL can deadlock (40P01).
+		models := make([]string, 0, len(paramsData))
+		for m := range paramsData {
+			models = append(models, m)
+		}
+		slices.Sort(models)
 		err = mc.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
-			for model, data := range paramsData {
+			for _, model := range models {
+				data := paramsData[model]
 				params := &configstoreTables.TableModelParameters{
 					Model: model,
 					Data:  string(data),

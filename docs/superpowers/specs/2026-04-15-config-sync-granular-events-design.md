@@ -183,11 +183,45 @@ Test `handleConfigSyncEvent` with mock ConfigStore, asserting in-memory state is
 
 ---
 
+## Multi-node / FullReload: issues and resolutions
+
+Granular sync and `FullReload` increase how often peers run `UpdateSyncConfig` (framework URL / pricing sync) and the final `reconcilePlugins` pass. Two classes of production issues showed up; both are addressed in code.
+
+### 1. `reconcilePlugins` removed built-in plugins when `config_plugins` had no row
+
+**Symptom:** `failed to reload virtual key: plugin governance not found` (and similar paths that call `getGovernancePlugin()`), even though nothing logged an explicit “plugin unloaded” — **`RemovePlugin` does not log on success**.
+
+**Cause:** `reconcilePlugins` compared in-memory plugin status to `dbEnabled`, where `dbEnabled` only contains rows from `config_plugins` with **`enabled=true`**. Built-in plugins (telemetry, governance, compat, …) are loaded from code at startup and **may have no row** in `config_plugins`. They were therefore absent from `dbEnabled` and incorrectly treated as “orphans” and removed from `BasePlugins`.
+
+**Resolution:** Build `dbRowsByName` for **all** plugin rows (any `enabled`). For built-ins (`lib.IsBuiltinPlugin`), if **there is no row at all**, **skip** `RemovePlugin`. If a row exists with `enabled=false`, `dbEnabled` still omits the plugin — **remove** from memory as before.
+
+**Files:** `transports/bifrost-http/server/server.go` — `reconcilePlugins`.
+
+---
+
+### 2. PostgreSQL deadlock (`SQLSTATE 40P01`) during model catalog DB sync
+
+**Symptom:** e.g. `failed to sync model parameters to database: failed to upsert model parameters for model … ERROR: deadlock detected`.
+
+**Cause:** `syncModelParameters` and `syncPricing` ran many `ON CONFLICT` upserts **inside one transaction**, but iterated **`range` over a Go `map`**, whose order is **non-deterministic**. Two nodes running `FullReload` / sync concurrently could lock rows in different orders.
+
+**Resolution:**
+
+- **`syncModelParameters`:** collect model names, **`slices.Sort`**, then upsert in sorted order inside the transaction.
+- **`syncPricing`:** dedupe pricing rows with stable key order, **`slices.SortFunc` by** `makeKey(model, provider, mode)`, then upsert in that order.
+
+**Note:** Per-row `ON CONFLICT` upserts (see comments on `UpsertModelParameters` / `UpsertModelPrices`) reduce contention for a **single** row; they do **not** remove cross-row ordering deadlocks inside one multi-statement transaction.
+
+**Files:** `framework/modelcatalog/sync.go` — `syncModelParameters`, `syncPricing`.
+
+---
+
 ## File Changelist
 
 | File | Change |
 |---|---|
 | `framework/configstore/publishing_config_store.go` | Fix event types for 6 write methods |
-| `transports/bifrost-http/server/server.go` | Add 4 cases to `handleConfigSyncEvent`; add 4 reload steps to `FullReload` |
+| `transports/bifrost-http/server/server.go` | Add 4 cases to `handleConfigSyncEvent`; add 4 reload steps to `FullReload`; fix `reconcilePlugins` for built-ins vs `config_plugins` |
 | `framework/configstore/publishing_config_store_test.go` | 6 new publish tests |
 | `transports/bifrost-http/server/server_test.go` | 5 new handler tests |
+| `framework/modelcatalog/sync.go` | Deterministic upsert order for model parameters + pricing (deadlock avoidance) |

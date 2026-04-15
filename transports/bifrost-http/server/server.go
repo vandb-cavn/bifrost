@@ -1047,8 +1047,13 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 	memPluginsBefore := s.GetPluginStatus(ctx)
 
 	dbEnabled := make(map[string]*tables.TablePlugin)
+	dbRowsByName := make(map[string]*tables.TablePlugin)
 	for _, p := range dbPlugins {
-		if p != nil && p.Enabled {
+		if p == nil {
+			continue
+		}
+		dbRowsByName[p.Name] = p
+		if p.Enabled {
 			dbEnabled[p.Name] = p
 		}
 	}
@@ -1063,6 +1068,16 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 
 	for internalName, st := range memPluginsBefore {
 		if _, inDB := dbEnabled[internalName]; !inDB {
+			// Built-ins (telemetry, governance, …) are always loaded from code when enabled at
+			// startup; they may have no row in config_plugins. Do not strip them from memory just
+			// because the DB list is missing that row — that would leave HTTP routes registered
+			// while BasePlugins no longer has the plugin (e.g. "plugin governance not found" on VK reload).
+			// If a row exists with enabled=false, dbEnabled omits it and we still remove below.
+			if lib.IsBuiltinPlugin(internalName) {
+				if _, hasRow := dbRowsByName[internalName]; !hasRow {
+					continue
+				}
+			}
 			if err := s.RemovePlugin(ctx, st.Name); err != nil {
 				logger.Warn("reconcilePlugins: failed to remove plugin %s: %v", internalName, err)
 			}

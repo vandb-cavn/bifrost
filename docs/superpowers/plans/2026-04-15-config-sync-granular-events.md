@@ -35,8 +35,9 @@ Run server tests: `GOWORK=off go test ./bifrost-http/server/... -v` (from `trans
 |---|---|
 | `framework/configstore/publishing_config_store.go` | Fix 6 `scheduleEvent` calls (change `"client_config"` → correct type) |
 | `framework/configstore/publishing_config_store_test.go` | Add 6 publish tests |
-| `transports/bifrost-http/server/server.go` | Add 4 cases to `handleConfigSyncEvent`; add 4 reload steps to `FullReload` |
+| `transports/bifrost-http/server/server.go` | Add 4 cases to `handleConfigSyncEvent`; add 4 reload steps to `FullReload`; fix `reconcilePlugins` built-in vs DB (follow-up) |
 | `transports/bifrost-http/server/server_test.go` | Add 3 handler tests (proxy config, pricing upsert, pricing delete) |
+| `framework/modelcatalog/sync.go` | Deterministic upsert order for pricing + model parameters (follow-up, deadlock avoidance) |
 
 ---
 
@@ -742,3 +743,33 @@ After implementation, verify:
 - [ ] All 6 publish tests pass
 - [ ] All handler tests pass
 - [ ] No regressions in existing test suites
+
+---
+
+## Follow-up fixes (bugs and resolutions)
+
+These are **not** changes to the Redis event contract; they harden multi-node behavior exposed once `FullReload` and framework sync run more often.
+
+### Bug A — `plugin governance not found` after cluster / admin actions
+
+| | |
+|---|---|
+| **Symptom** | API logs `failed to reload virtual key: plugin governance not found`; no obvious “unload” line in logs. |
+| **Root cause** | `reconcilePlugins` (end of `FullReload`) removed built-in plugins from `BasePlugins` when **`config_plugins` had no row** for that built-in, because reconciliation only treated `dbEnabled` (enabled rows) as “desired state”. |
+| **Resolution** | In `reconcilePlugins`, track all DB rows in `dbRowsByName`. For `lib.IsBuiltinPlugin(name)`, if **no row exists**, **do not** call `RemovePlugin`. If a row exists with `enabled=false`, still remove. |
+| **File** | `transports/bifrost-http/server/server.go` |
+
+### Bug B — Postgres `deadlock detected` during `UpdateSyncConfig` / catalog sync
+
+| | |
+|---|---|
+| **Symptom** | `ERROR: deadlock detected (SQLSTATE 40P01)` while upserting model parameters or pricing inside a transaction. |
+| **Root cause** | Upsert loops used `for k, v := range map` inside `ExecuteTransaction`; map iteration order differs across goroutines/nodes → different lock order on rows. |
+| **Resolution** | **Model parameters:** sort model name strings, then upsert. **Pricing:** build deduped rows, sort by `makeKey(model, provider, mode)`, then upsert. |
+| **File** | `framework/modelcatalog/sync.go` (`syncModelParameters`, `syncPricing`) |
+
+### Verification
+
+- Rebuild / deploy including the above files.
+- Under multi-node load, confirm VK create/update no longer fails with `plugin governance not found` after `full_reload` events.
+- Confirm framework sync no longer intermittently logs deadlock on `model_parameters` / pricing tables.
