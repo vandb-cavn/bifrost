@@ -180,16 +180,12 @@ func (t *UsageTracker) resetExpiredCounters(ctx context.Context) {
 	}
 
 	// ==== PART 3: Dump all rate limits and budgets to database ====
-	var tokBL, reqBL map[string]int64
-	var budBL map[string]float64
-	if ls, ok := t.store.(*LocalGovernanceStore); ok {
-		tokBL, reqBL = ls.RateLimitDumpBaselines()
-		budBL = ls.BudgetDumpBaselines()
-	}
-	if err := t.store.DumpRateLimits(ctx, tokBL, reqBL); err != nil {
+	// Non-Redis: pass nil baselines — in-memory usage is already absolute; adding LastDBUsages would double-count.
+	// Redis: DumpRateLimits/DumpBudgets read authoritative values via IsRedisAvailable() + redisCounters.
+	if err := t.store.DumpRateLimits(ctx, nil, nil); err != nil {
 		t.logger.Error("failed to dump rate limits to database: %v", err)
 	}
-	if err := t.store.DumpBudgets(ctx, budBL); err != nil {
+	if err := t.store.DumpBudgets(ctx, nil); err != nil {
 		t.logger.Error("failed to dump budgets to database: %v", err)
 	}
 }

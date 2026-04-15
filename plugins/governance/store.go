@@ -1992,34 +1992,6 @@ func (gs *LocalGovernanceStore) ResetExpiredRateLimits(ctx context.Context, rese
 	return nil
 }
 
-// RateLimitDumpBaselines returns last persisted token/request usage per rate limit (non-Redis dump path).
-func (gs *LocalGovernanceStore) RateLimitDumpBaselines() (token map[string]int64, request map[string]int64) {
-	token = make(map[string]int64)
-	request = make(map[string]int64)
-	gs.LastDBUsagesRateLimitsTokensMu.RLock()
-	for k, v := range gs.LastDBUsagesTokensRateLimits {
-		token[k] = v
-	}
-	gs.LastDBUsagesRateLimitsTokensMu.RUnlock()
-	gs.LastDBUsagesRateLimitsRequestsMu.RLock()
-	for k, v := range gs.LastDBUsagesRequestsRateLimits {
-		request[k] = v
-	}
-	gs.LastDBUsagesRateLimitsRequestsMu.RUnlock()
-	return token, request
-}
-
-// BudgetDumpBaselines returns last persisted budget usage per budget id (non-Redis dump path).
-func (gs *LocalGovernanceStore) BudgetDumpBaselines() map[string]float64 {
-	gs.LastDBUsagesBudgetsMu.RLock()
-	defer gs.LastDBUsagesBudgetsMu.RUnlock()
-	out := make(map[string]float64, len(gs.LastDBUsagesBudgets))
-	for k, v := range gs.LastDBUsagesBudgets {
-		out[k] = v
-	}
-	return out
-}
-
 // DumpRateLimits dumps all rate limits to the database
 func (gs *LocalGovernanceStore) DumpRateLimits(ctx context.Context, tokenBaselines map[string]int64, requestBaselines map[string]int64) error {
 	if gs.configStore == nil {
