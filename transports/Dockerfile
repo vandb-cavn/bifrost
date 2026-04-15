@@ -23,12 +23,15 @@
   
   # Set environment for CGO-enabled build (required for go-sqlite3)
   ENV CGO_ENABLED=1 GOOS=linux
-  
+
+  # go.mod uses replace ../core, ../framework, ../plugins/governance (paths relative to this go.mod in /app).
+  COPY core /core
+  COPY framework /framework
+  COPY plugins/governance /plugins/governance
+
   COPY transports/go.mod transports/go.sum ./
-  RUN ls
-  RUN cat go.mod
   RUN go mod download
-  
+
   # Copy source code and dependencies
   COPY transports/ ./
   
