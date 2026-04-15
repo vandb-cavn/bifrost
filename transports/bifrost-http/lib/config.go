@@ -738,7 +738,12 @@ func loadClientConfig(ctx context.Context, config *Config, configData *ConfigDat
 		return
 	}
 	// Case 2b: Both DB and file config exist - use hash-based reconciliation
-	fileHash, hashErr := configData.Client.GenerateClientConfigHash()
+	// Hash must use the same normalization as Case 1 / DB persistence: apply defaults
+	// before hashing the file-derived client (otherwise e.g. omitted mcp_agent_depth hashes
+	// as 0 while DB row was saved with default depth → spurious "config.json changed").
+	fileClient := *configData.Client
+	applyClientConfigDefaults(&fileClient)
+	fileHash, hashErr := fileClient.GenerateClientConfigHash()
 	if hashErr != nil {
 		logger.Warn("failed to generate client config hash from file: %v", hashErr)
 		return
