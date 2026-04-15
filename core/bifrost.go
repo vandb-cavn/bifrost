@@ -3109,16 +3109,15 @@ func (bifrost *Bifrost) RemoveProvider(providerKey schemas.ModelProvider) error 
 	}
 	pq := pqValue.(*ProviderQueue)
 
-	// Step 2: Signal closing to producers (prevents new sends)
-	// This must happen before closing the queue to avoid "send on closed channel" panics
+	// Step 2: Signal closing. This closes pq.done, which both unblocks producers
+	// waiting on a full queue and causes workers to exit their select loop.
+	// We do NOT close pq.queue: the queue channel must never be closed while any
+	// producer goroutine might still hold a reference to this ProviderQueue,
+	// because sending to a closed channel panics even inside a select statement.
 	pq.signalClosing()
 	bifrost.logger.Debug("signaled closing for provider %s", providerKey)
 
-	// Step 3: Now safe to close the queue (no new producers can send)
-	pq.closeQueue()
-	bifrost.logger.Debug("closed request queue for provider %s", providerKey)
-
-	// Step 4: Wait for all workers to finish processing in-flight requests
+	// Step 3: Wait for all workers to finish processing in-flight requests
 	waitGroup, exists := bifrost.waitGroups.Load(providerKey)
 	if exists {
 		waitGroup.(*sync.WaitGroup).Wait()
@@ -3282,11 +3281,9 @@ transferComplete:
 		bifrost.logger.Info("transferred %d buffered requests to new queue for provider %s", transferredCount, providerKey)
 	}
 
-	// Step 5: Close the old queue to signal workers to stop
-	oldPq.closeQueue()
-	bifrost.logger.Debug("closed old request queue for provider %s", providerKey)
-
-	// Step 6: Wait for all existing workers to finish processing in-flight requests
+	// Step 5: Wait for all existing workers to finish processing in-flight requests
+	// Workers exit via oldPq.done (signaled above). We do NOT close oldPq.queue —
+	// see RemoveProvider for the rationale.
 	waitGroup, exists := bifrost.waitGroups.Load(providerKey)
 	if exists {
 		waitGroup.(*sync.WaitGroup).Wait()
@@ -4937,7 +4934,44 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 		}
 	}()
 
-	for req := range pq.queue {
+	for {
+		var req *ChannelMessage
+		select {
+		case r, ok := <-pq.queue:
+			if !ok {
+				return
+			}
+			req = r
+		case <-pq.done:
+			// Provider is shutting down. Drain any buffered requests and send
+			// back errors so callers are not left blocked on their response channel.
+			for {
+				select {
+				case r := <-pq.queue:
+					provKey, mod, _ := r.GetRequestFields()
+					select {
+					case r.Err <- schemas.BifrostError{
+						IsBifrostError: false,
+						Error: &schemas.ErrorField{
+							Message: "provider is shutting down",
+						},
+						ExtraFields: schemas.BifrostErrorExtraFields{
+							RequestType:    r.RequestType,
+							Provider:       provKey,
+							ModelRequested: mod,
+						},
+					}:
+					case <-r.Context.Done():
+					case <-time.After(5 * time.Second):
+						bifrost.logger.Warn("Timeout while sending shutdown error, client may have disconnected")
+					}
+					bifrost.releaseChannelMessage(r)
+				default:
+					return
+				}
+			}
+		}
+
 		_, model, _ := req.BifrostRequest.GetRequestFields()
 
 		var result *schemas.BifrostResponse
@@ -6491,15 +6525,12 @@ func (bifrost *Bifrost) Shutdown() {
 	if bifrost.ctx.Err() == nil && bifrost.cancel != nil {
 		bifrost.cancel()
 	}
-	// ALWAYS close all provider queues to signal workers to stop,
-	// even if context was already cancelled. This prevents goroutine leaks.
-	// Use the ProviderQueue lifecycle: signal closing, then close the queue
+	// Signal all provider queues to close. Workers exit via pq.done;
+	// we never close pq.queue to avoid "send on closed channel" panics in
+	// producers that are concurrently in tryRequest.
 	bifrost.requestQueues.Range(func(key, value interface{}) bool {
 		pq := value.(*ProviderQueue)
-		// Signal closing to producers (uses sync.Once internally)
 		pq.signalClosing()
-		// Close the queue to signal workers (uses sync.Once internally)
-		pq.closeQueue()
 		return true
 	})
 

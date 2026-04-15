@@ -1300,3 +1300,95 @@ func TestUpdateProvider_ProviderSliceIntegrity(t *testing.T) {
 		}
 	})
 }
+
+// TestProviderQueue_SendOnClosedChannel_Race demonstrates the TOCTOU race that
+// causes the "send on closed channel" production panic.
+//
+// The sequence is:
+//  1. Producer calls isClosing() → false  (queue is still open)
+//  2. Concurrently: UpdateProvider/RemoveProvider calls signalClosing() + closeQueue()
+//  3. Producer enters select { case pq.queue <- msg: ... case <-pq.done: ... }
+//     → PANIC: Go's selectgo iterates cases in a randomised pollorder. When the
+//       closed-channel send case is checked first, it immediately panics via
+//       goto sclose — before it can reach the done case.
+//       The case <-pq.done: guard only saves you when done happens to be checked
+//       first in that random ordering (≈50 % of the time with two cases).
+//
+// We run many iterations so that the panic is statistically certain to surface
+// at least once, confirming the hypothesis.
+func TestProviderQueue_SendOnClosedChannel_Race(t *testing.T) {
+	// With two select cases each iteration has a ~50 % chance of panicking.
+	// The probability of never panicking in 200 iterations is (0.5)^200 ≈ 0.
+	const iterations = 200
+	panicCount := 0
+
+	for i := 0; i < iterations; i++ {
+		func() {
+			pq := &ProviderQueue{
+				queue:      make(chan *ChannelMessage, 10),
+				done:       make(chan struct{}),
+				signalOnce: sync.Once{},
+				closeOnce:  sync.Once{},
+			}
+
+			// Synchronization barriers to force the exact race interleaving.
+			passedIsClosingCheck := make(chan struct{})
+			queueClosed := make(chan struct{})
+
+			var panicked bool
+			var wg sync.WaitGroup
+			wg.Add(1)
+
+			// Producer — mirrors the hot path in tryRequest.
+			go func() {
+				defer wg.Done()
+				defer func() {
+					if r := recover(); r != nil && fmt.Sprint(r) == "send on closed channel" {
+						panicked = true
+					}
+				}()
+
+				// Step 1: isClosing() passes — queue is open.
+				if pq.isClosing() {
+					return
+				}
+
+				// Signal: past the isClosing() gate.
+				close(passedIsClosingCheck)
+
+				// Wait for the queue to be closed. This represents the real work
+				// tryRequest does between the isClosing() check and the select
+				// (MCP setup, tracer lookup, plugin pipeline acquisition).
+				<-queueClosed
+
+				// Step 2: enter the exact select guard used in production.
+				// pq.queue is closed AND pq.done is closed.
+				// When selectgo picks the send case first in its random pollorder
+				// it hits goto sclose and panics — the done case cannot save it.
+				msg := &ChannelMessage{}
+				select {
+				case pq.queue <- msg: // panics ~50 % of iterations
+				case <-pq.done:       // selected the other ~50 %
+				}
+			}()
+
+			// Closer — mirrors UpdateProvider / RemoveProvider.
+			go func() {
+				<-passedIsClosingCheck
+				pq.signalClosing() // closes done, sets closing = 1
+				pq.closeQueue()    // closes queue — the dangerous step
+				close(queueClosed) // release the producer into the select
+			}()
+
+			wg.Wait()
+			if panicked {
+				panicCount++
+			}
+		}()
+	}
+
+	if panicCount == 0 {
+		t.Fatalf("expected at least one 'send on closed channel' panic across %d iterations, got none", iterations)
+	}
+	t.Logf("confirmed: panic triggered in %d / %d iterations — hypothesis is correct", panicCount, iterations)
+}
