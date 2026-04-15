@@ -1992,6 +1992,34 @@ func (gs *LocalGovernanceStore) ResetExpiredRateLimits(ctx context.Context, rese
 	return nil
 }
 
+// RateLimitDumpBaselines returns last persisted token/request usage per rate limit (non-Redis dump path).
+func (gs *LocalGovernanceStore) RateLimitDumpBaselines() (token map[string]int64, request map[string]int64) {
+	token = make(map[string]int64)
+	request = make(map[string]int64)
+	gs.LastDBUsagesRateLimitsTokensMu.RLock()
+	for k, v := range gs.LastDBUsagesTokensRateLimits {
+		token[k] = v
+	}
+	gs.LastDBUsagesRateLimitsTokensMu.RUnlock()
+	gs.LastDBUsagesRateLimitsRequestsMu.RLock()
+	for k, v := range gs.LastDBUsagesRequestsRateLimits {
+		request[k] = v
+	}
+	gs.LastDBUsagesRateLimitsRequestsMu.RUnlock()
+	return token, request
+}
+
+// BudgetDumpBaselines returns last persisted budget usage per budget id (non-Redis dump path).
+func (gs *LocalGovernanceStore) BudgetDumpBaselines() map[string]float64 {
+	gs.LastDBUsagesBudgetsMu.RLock()
+	defer gs.LastDBUsagesBudgetsMu.RUnlock()
+	out := make(map[string]float64, len(gs.LastDBUsagesBudgets))
+	for k, v := range gs.LastDBUsagesBudgets {
+		out[k] = v
+	}
+	return out
+}
+
 // DumpRateLimits dumps all rate limits to the database
 func (gs *LocalGovernanceStore) DumpRateLimits(ctx context.Context, tokenBaselines map[string]int64, requestBaselines map[string]int64) error {
 	if gs.configStore == nil {
@@ -2102,12 +2130,14 @@ func (gs *LocalGovernanceStore) DumpRateLimits(ctx context.Context, tokenBaselin
 					RequestCurrentUsage: rateLimit.RequestCurrentUsage,
 				}
 				if gs.IsRedisAvailable() && gs.redisCounters != nil {
-					if t, err := gs.redisCounters.GetTokens(ctx, rateLimit.ID); err == nil {
-						update.TokenCurrentUsage = t
+					t, errT := gs.redisCounters.GetTokens(ctx, rateLimit.ID)
+					r, errR := gs.redisCounters.GetRequests(ctx, rateLimit.ID)
+					if errT != nil || errR != nil {
+						gs.logger.Warn("rate limit dump skipping %s: redis read failed (tokens=%v, requests=%v)", rateLimit.ID, errT, errR)
+						continue
 					}
-					if r, err := gs.redisCounters.GetRequests(ctx, rateLimit.ID); err == nil {
-						update.RequestCurrentUsage = r
-					}
+					update.TokenCurrentUsage = t
+					update.RequestCurrentUsage = r
 				} else {
 					if tokenBaseline, exists := tokenBaselines[rateLimit.ID]; exists {
 						update.TokenCurrentUsage += tokenBaseline
@@ -2195,33 +2225,42 @@ func (gs *LocalGovernanceStore) DumpBudgets(ctx context.Context, baselines map[s
 	})
 
 	if len(budgets) > 0 && gs.configStore != nil {
-		if err := gs.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
-			// Update each budget atomically using direct UPDATE to avoid deadlocks
-			// (SELECT + Save pattern causes deadlocks when multiple instances run concurrently)
-			for _, inMemoryBudget := range budgets {
-				newUsage := inMemoryBudget.CurrentUsage
-				if gs.IsRedisAvailable() && gs.redisCounters != nil {
-					if s, err := gs.redisCounters.GetBudget(ctx, inMemoryBudget.ID); err == nil {
-						newUsage = s
-					}
-				} else if baseline, exists := baselines[inMemoryBudget.ID]; exists {
-					newUsage += baseline
+		type budgetUpdate struct {
+			id       string
+			newUsage float64
+		}
+		var budgetUpdates []budgetUpdate
+		for _, inMemoryBudget := range budgets {
+			newUsage := inMemoryBudget.CurrentUsage
+			if gs.IsRedisAvailable() && gs.redisCounters != nil {
+				s, err := gs.redisCounters.GetBudget(ctx, inMemoryBudget.ID)
+				if err != nil {
+					gs.logger.Warn("budget dump skipping %s: redis read failed: %v", inMemoryBudget.ID, err)
+					continue
 				}
-
-				// Direct UPDATE avoids read-then-write lock escalation that causes deadlocks
-				// Use Session with SkipHooks to avoid triggering BeforeSave hook validation
+				newUsage = s
+			} else if baseline, exists := baselines[inMemoryBudget.ID]; exists {
+				newUsage += baseline
+			}
+			budgetUpdates = append(budgetUpdates, budgetUpdate{id: inMemoryBudget.ID, newUsage: newUsage})
+		}
+		if len(budgetUpdates) == 0 {
+			return nil
+		}
+		if err := gs.configStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
+			for _, u := range budgetUpdates {
 				result := tx.WithContext(ctx).
 					Session(&gorm.Session{SkipHooks: true}).
 					Model(&configstoreTables.TableBudget{}).
-					Where("id = ?", inMemoryBudget.ID).
-					Update("current_usage", newUsage)
+					Where("id = ?", u.id).
+					Update("current_usage", u.newUsage)
 
 				if result.Error != nil {
-					return fmt.Errorf("failed to update budget %s: %w", inMemoryBudget.ID, result.Error)
+					return fmt.Errorf("failed to update budget %s: %w", u.id, result.Error)
 				}
 				if gs.IsRedisAvailable() && gs.redisCounters != nil {
 					gs.LastDBUsagesBudgetsMu.Lock()
-					gs.LastDBUsagesBudgets[inMemoryBudget.ID] = newUsage
+					gs.LastDBUsagesBudgets[u.id] = u.newUsage
 					gs.LastDBUsagesBudgetsMu.Unlock()
 				}
 			}

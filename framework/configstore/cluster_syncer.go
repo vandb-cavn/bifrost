@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -146,6 +147,7 @@ func (s *RedisClusterSyncer) watermarkFirstFullReload(
 func (s *RedisClusterSyncer) hasStreamGap(ctx context.Context, lastID string) bool {
 	info, err := s.client.XInfoStream(ctx, streamKey).Result()
 	if err != nil {
+		log.Printf("cluster sync: XInfoStream failed (treating as no gap): %v", err)
 		return false
 	}
 	if info.FirstEntry.ID == "" {

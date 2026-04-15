@@ -31,6 +31,19 @@ func scheduleEvent(ctx context.Context, event ConfigSyncEvent, syncer ClusterSyn
 	_ = syncer.Publish(ctx, event)
 }
 
+// ctxForTxnWrite returns the context carried by the GORM transaction when present.
+// ExecuteTransaction attaches the cluster event accumulator to that context; write helpers
+// must use it instead of an outer context so events are buffered until commit.
+func ctxForTxnWrite(ctx context.Context, tx []*gorm.DB) context.Context {
+	if len(tx) == 0 || tx[0] == nil {
+		return ctx
+	}
+	if stmt := tx[0].Statement; stmt != nil && stmt.Context != nil {
+		return stmt.Context
+	}
+	return ctx
+}
+
 // PublishingConfigStore wraps ConfigStore and emits ConfigSyncEvents after committed writes.
 type PublishingConfigStore struct {
 	ConfigStore
@@ -57,7 +70,10 @@ func (pcs *PublishingConfigStore) ExecuteTransaction(ctx context.Context, fn fun
 	}
 	acc := &eventAccumulator{}
 	txCtx := withEventAccumulator(ctx, acc)
-	err := pcs.ConfigStore.ExecuteTransaction(txCtx, fn)
+	err := pcs.ConfigStore.ExecuteTransaction(txCtx, func(tx *gorm.DB) error {
+		tx = tx.WithContext(txCtx)
+		return fn(tx)
+	})
 	if err != nil {
 		return err
 	}
@@ -72,6 +88,7 @@ func (pcs *PublishingConfigStore) ExecuteTransaction(ctx context.Context, fn fun
 // --- Write overrides ---
 
 func (pcs *PublishingConfigStore) UpdateProvidersConfig(ctx context.Context, providers map[schemas.ModelProvider]ProviderConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateProvidersConfig(ctx, providers, tx...); err != nil {
 		return err
 	}
@@ -80,6 +97,7 @@ func (pcs *PublishingConfigStore) UpdateProvidersConfig(ctx context.Context, pro
 }
 
 func (pcs *PublishingConfigStore) AddProvider(ctx context.Context, provider schemas.ModelProvider, config ProviderConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.AddProvider(ctx, provider, config, tx...); err != nil {
 		return err
 	}
@@ -88,6 +106,7 @@ func (pcs *PublishingConfigStore) AddProvider(ctx context.Context, provider sche
 }
 
 func (pcs *PublishingConfigStore) UpdateProvider(ctx context.Context, provider schemas.ModelProvider, config ProviderConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateProvider(ctx, provider, config, tx...); err != nil {
 		return err
 	}
@@ -96,6 +115,7 @@ func (pcs *PublishingConfigStore) UpdateProvider(ctx context.Context, provider s
 }
 
 func (pcs *PublishingConfigStore) DeleteProvider(ctx context.Context, provider schemas.ModelProvider, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteProvider(ctx, provider, tx...); err != nil {
 		return err
 	}
@@ -104,6 +124,7 @@ func (pcs *PublishingConfigStore) DeleteProvider(ctx context.Context, provider s
 }
 
 func (pcs *PublishingConfigStore) CreateVirtualKey(ctx context.Context, vk *tables.TableVirtualKey, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateVirtualKey(ctx, vk, tx...); err != nil {
 		return err
 	}
@@ -112,6 +133,7 @@ func (pcs *PublishingConfigStore) CreateVirtualKey(ctx context.Context, vk *tabl
 }
 
 func (pcs *PublishingConfigStore) UpdateVirtualKey(ctx context.Context, vk *tables.TableVirtualKey, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateVirtualKey(ctx, vk, tx...); err != nil {
 		return err
 	}
@@ -128,6 +150,7 @@ func (pcs *PublishingConfigStore) DeleteVirtualKey(ctx context.Context, id strin
 }
 
 func (pcs *PublishingConfigStore) CreateTeam(ctx context.Context, team *tables.TableTeam, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateTeam(ctx, team, tx...); err != nil {
 		return err
 	}
@@ -136,6 +159,7 @@ func (pcs *PublishingConfigStore) CreateTeam(ctx context.Context, team *tables.T
 }
 
 func (pcs *PublishingConfigStore) UpdateTeam(ctx context.Context, team *tables.TableTeam, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateTeam(ctx, team, tx...); err != nil {
 		return err
 	}
@@ -152,6 +176,7 @@ func (pcs *PublishingConfigStore) DeleteTeam(ctx context.Context, id string) err
 }
 
 func (pcs *PublishingConfigStore) CreateCustomer(ctx context.Context, c *tables.TableCustomer, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateCustomer(ctx, c, tx...); err != nil {
 		return err
 	}
@@ -160,6 +185,7 @@ func (pcs *PublishingConfigStore) CreateCustomer(ctx context.Context, c *tables.
 }
 
 func (pcs *PublishingConfigStore) UpdateCustomer(ctx context.Context, c *tables.TableCustomer, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateCustomer(ctx, c, tx...); err != nil {
 		return err
 	}
@@ -176,6 +202,7 @@ func (pcs *PublishingConfigStore) DeleteCustomer(ctx context.Context, id string)
 }
 
 func (pcs *PublishingConfigStore) CreateModelConfig(ctx context.Context, mc *tables.TableModelConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateModelConfig(ctx, mc, tx...); err != nil {
 		return err
 	}
@@ -184,6 +211,7 @@ func (pcs *PublishingConfigStore) CreateModelConfig(ctx context.Context, mc *tab
 }
 
 func (pcs *PublishingConfigStore) UpdateModelConfig(ctx context.Context, mc *tables.TableModelConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateModelConfig(ctx, mc, tx...); err != nil {
 		return err
 	}
@@ -192,6 +220,7 @@ func (pcs *PublishingConfigStore) UpdateModelConfig(ctx context.Context, mc *tab
 }
 
 func (pcs *PublishingConfigStore) UpdateModelConfigs(ctx context.Context, modelConfigs []*tables.TableModelConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateModelConfigs(ctx, modelConfigs, tx...); err != nil {
 		return err
 	}
@@ -208,6 +237,7 @@ func (pcs *PublishingConfigStore) DeleteModelConfig(ctx context.Context, id stri
 }
 
 func (pcs *PublishingConfigStore) CreateRoutingRule(ctx context.Context, rule *tables.TableRoutingRule, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateRoutingRule(ctx, rule, tx...); err != nil {
 		return err
 	}
@@ -216,6 +246,7 @@ func (pcs *PublishingConfigStore) CreateRoutingRule(ctx context.Context, rule *t
 }
 
 func (pcs *PublishingConfigStore) UpdateRoutingRule(ctx context.Context, rule *tables.TableRoutingRule, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateRoutingRule(ctx, rule, tx...); err != nil {
 		return err
 	}
@@ -224,6 +255,7 @@ func (pcs *PublishingConfigStore) UpdateRoutingRule(ctx context.Context, rule *t
 }
 
 func (pcs *PublishingConfigStore) DeleteRoutingRule(ctx context.Context, id string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteRoutingRule(ctx, id, tx...); err != nil {
 		return err
 	}
@@ -256,6 +288,7 @@ func (pcs *PublishingConfigStore) DeleteMCPClientConfig(ctx context.Context, id 
 }
 
 func (pcs *PublishingConfigStore) CreatePlugin(ctx context.Context, plugin *tables.TablePlugin, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreatePlugin(ctx, plugin, tx...); err != nil {
 		return err
 	}
@@ -264,6 +297,7 @@ func (pcs *PublishingConfigStore) CreatePlugin(ctx context.Context, plugin *tabl
 }
 
 func (pcs *PublishingConfigStore) UpsertPlugin(ctx context.Context, plugin *tables.TablePlugin, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpsertPlugin(ctx, plugin, tx...); err != nil {
 		return err
 	}
@@ -272,6 +306,7 @@ func (pcs *PublishingConfigStore) UpsertPlugin(ctx context.Context, plugin *tabl
 }
 
 func (pcs *PublishingConfigStore) UpdatePlugin(ctx context.Context, plugin *tables.TablePlugin, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdatePlugin(ctx, plugin, tx...); err != nil {
 		return err
 	}
@@ -280,6 +315,7 @@ func (pcs *PublishingConfigStore) UpdatePlugin(ctx context.Context, plugin *tabl
 }
 
 func (pcs *PublishingConfigStore) DeletePlugin(ctx context.Context, name string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeletePlugin(ctx, name, tx...); err != nil {
 		return err
 	}
@@ -320,6 +356,7 @@ func (pcs *PublishingConfigStore) UpdateFrameworkConfig(ctx context.Context, con
 }
 
 func (pcs *PublishingConfigStore) CreateProviderKey(ctx context.Context, provider schemas.ModelProvider, key schemas.Key, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateProviderKey(ctx, provider, key, tx...); err != nil {
 		return err
 	}
@@ -328,6 +365,7 @@ func (pcs *PublishingConfigStore) CreateProviderKey(ctx context.Context, provide
 }
 
 func (pcs *PublishingConfigStore) UpdateProviderKey(ctx context.Context, provider schemas.ModelProvider, keyID string, key schemas.Key, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateProviderKey(ctx, provider, keyID, key, tx...); err != nil {
 		return err
 	}
@@ -336,6 +374,7 @@ func (pcs *PublishingConfigStore) UpdateProviderKey(ctx context.Context, provide
 }
 
 func (pcs *PublishingConfigStore) DeleteProviderKey(ctx context.Context, provider schemas.ModelProvider, keyID string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteProviderKey(ctx, provider, keyID, tx...); err != nil {
 		return err
 	}
@@ -344,6 +383,7 @@ func (pcs *PublishingConfigStore) DeleteProviderKey(ctx context.Context, provide
 }
 
 func (pcs *PublishingConfigStore) CreateVirtualKeyProviderConfig(ctx context.Context, vkpc *tables.TableVirtualKeyProviderConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateVirtualKeyProviderConfig(ctx, vkpc, tx...); err != nil {
 		return err
 	}
@@ -352,6 +392,7 @@ func (pcs *PublishingConfigStore) CreateVirtualKeyProviderConfig(ctx context.Con
 }
 
 func (pcs *PublishingConfigStore) UpdateVirtualKeyProviderConfig(ctx context.Context, vkpc *tables.TableVirtualKeyProviderConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateVirtualKeyProviderConfig(ctx, vkpc, tx...); err != nil {
 		return err
 	}
@@ -360,6 +401,7 @@ func (pcs *PublishingConfigStore) UpdateVirtualKeyProviderConfig(ctx context.Con
 }
 
 func (pcs *PublishingConfigStore) DeleteVirtualKeyProviderConfig(ctx context.Context, id uint, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteVirtualKeyProviderConfig(ctx, id, tx...); err != nil {
 		return err
 	}
@@ -368,6 +410,7 @@ func (pcs *PublishingConfigStore) DeleteVirtualKeyProviderConfig(ctx context.Con
 }
 
 func (pcs *PublishingConfigStore) CreateVirtualKeyMCPConfig(ctx context.Context, vkmc *tables.TableVirtualKeyMCPConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateVirtualKeyMCPConfig(ctx, vkmc, tx...); err != nil {
 		return err
 	}
@@ -376,6 +419,7 @@ func (pcs *PublishingConfigStore) CreateVirtualKeyMCPConfig(ctx context.Context,
 }
 
 func (pcs *PublishingConfigStore) UpdateVirtualKeyMCPConfig(ctx context.Context, vkmc *tables.TableVirtualKeyMCPConfig, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateVirtualKeyMCPConfig(ctx, vkmc, tx...); err != nil {
 		return err
 	}
@@ -384,6 +428,7 @@ func (pcs *PublishingConfigStore) UpdateVirtualKeyMCPConfig(ctx context.Context,
 }
 
 func (pcs *PublishingConfigStore) DeleteVirtualKeyMCPConfig(ctx context.Context, id uint, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteVirtualKeyMCPConfig(ctx, id, tx...); err != nil {
 		return err
 	}
@@ -400,6 +445,7 @@ func (pcs *PublishingConfigStore) UpdateMCPClientDiscoveredTools(ctx context.Con
 }
 
 func (pcs *PublishingConfigStore) CreatePricingOverride(ctx context.Context, override *tables.TablePricingOverride, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreatePricingOverride(ctx, override, tx...); err != nil {
 		return err
 	}
@@ -408,6 +454,7 @@ func (pcs *PublishingConfigStore) CreatePricingOverride(ctx context.Context, ove
 }
 
 func (pcs *PublishingConfigStore) UpdatePricingOverride(ctx context.Context, override *tables.TablePricingOverride, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdatePricingOverride(ctx, override, tx...); err != nil {
 		return err
 	}
@@ -416,6 +463,7 @@ func (pcs *PublishingConfigStore) UpdatePricingOverride(ctx context.Context, ove
 }
 
 func (pcs *PublishingConfigStore) DeletePricingOverride(ctx context.Context, id string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeletePricingOverride(ctx, id, tx...); err != nil {
 		return err
 	}
@@ -424,6 +472,7 @@ func (pcs *PublishingConfigStore) DeletePricingOverride(ctx context.Context, id 
 }
 
 func (pcs *PublishingConfigStore) CreateRateLimit(ctx context.Context, rl *tables.TableRateLimit, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateRateLimit(ctx, rl, tx...); err != nil {
 		return err
 	}
@@ -432,6 +481,7 @@ func (pcs *PublishingConfigStore) CreateRateLimit(ctx context.Context, rl *table
 }
 
 func (pcs *PublishingConfigStore) UpdateRateLimit(ctx context.Context, rl *tables.TableRateLimit, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateRateLimit(ctx, rl, tx...); err != nil {
 		return err
 	}
@@ -440,6 +490,7 @@ func (pcs *PublishingConfigStore) UpdateRateLimit(ctx context.Context, rl *table
 }
 
 func (pcs *PublishingConfigStore) UpdateRateLimits(ctx context.Context, rls []*tables.TableRateLimit, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateRateLimits(ctx, rls, tx...); err != nil {
 		return err
 	}
@@ -448,6 +499,7 @@ func (pcs *PublishingConfigStore) UpdateRateLimits(ctx context.Context, rls []*t
 }
 
 func (pcs *PublishingConfigStore) DeleteRateLimit(ctx context.Context, id string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteRateLimit(ctx, id, tx...); err != nil {
 		return err
 	}
@@ -456,6 +508,7 @@ func (pcs *PublishingConfigStore) DeleteRateLimit(ctx context.Context, id string
 }
 
 func (pcs *PublishingConfigStore) CreateBudget(ctx context.Context, b *tables.TableBudget, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.CreateBudget(ctx, b, tx...); err != nil {
 		return err
 	}
@@ -464,6 +517,7 @@ func (pcs *PublishingConfigStore) CreateBudget(ctx context.Context, b *tables.Ta
 }
 
 func (pcs *PublishingConfigStore) UpdateBudget(ctx context.Context, b *tables.TableBudget, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateBudget(ctx, b, tx...); err != nil {
 		return err
 	}
@@ -472,6 +526,7 @@ func (pcs *PublishingConfigStore) UpdateBudget(ctx context.Context, b *tables.Ta
 }
 
 func (pcs *PublishingConfigStore) UpdateBudgets(ctx context.Context, bs []*tables.TableBudget, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.UpdateBudgets(ctx, bs, tx...); err != nil {
 		return err
 	}
@@ -480,6 +535,7 @@ func (pcs *PublishingConfigStore) UpdateBudgets(ctx context.Context, bs []*table
 }
 
 func (pcs *PublishingConfigStore) DeleteBudget(ctx context.Context, id string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteBudget(ctx, id, tx...); err != nil {
 		return err
 	}

@@ -2,8 +2,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -16,7 +18,6 @@ import (
 
 	"github.com/fasthttp/router"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
@@ -34,6 +35,7 @@ import (
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	bfws "github.com/maximhq/bifrost/transports/bifrost-http/websocket"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttpadaptor"
 )
@@ -1026,6 +1028,10 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 
 	for name, p := range dbEnabled {
 		if _, inMem := memPlugins[name]; inMem {
+			mem := s.getPluginConfig(name)
+			if pluginConfigMatchesDB(mem, p) {
+				continue
+			}
 			if err := s.ReloadPlugin(ctx, name, p.Path, p.Config, p.Placement, p.Order); err != nil {
 				logger.Warn("reconcilePlugins: failed to reload plugin %s: %v", name, err)
 			}
@@ -1033,6 +1039,67 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func pluginConfigMatchesDB(mem *schemas.PluginConfig, db *tables.TablePlugin) bool {
+	if db == nil {
+		return false
+	}
+	if mem == nil {
+		return false
+	}
+	if !stringPtrEqual(mem.Path, db.Path) {
+		return false
+	}
+	if !placementPtrEqual(mem.Placement, db.Placement) {
+		return false
+	}
+	if !intPtrEqual(mem.Order, db.Order) {
+		return false
+	}
+	return jsonConfigEqualNormalized(mem.Config, db.Config)
+}
+
+func stringPtrEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func placementPtrEqual(a, b *schemas.PluginPlacement) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func jsonConfigEqualNormalized(a, b any) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	ja, err1 := json.Marshal(a)
+	jb, err2 := json.Marshal(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return bytes.Equal(ja, jb)
 }
 
 func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEvent) {

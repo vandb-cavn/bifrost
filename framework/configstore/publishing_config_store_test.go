@@ -16,12 +16,12 @@ import (
 
 type testLogger struct{}
 
-func (testLogger) Debug(string, ...any) {}
-func (testLogger) Info(string, ...any)  {}
-func (testLogger) Warn(string, ...any)  {}
-func (testLogger) Error(string, ...any) {}
-func (testLogger) Fatal(string, ...any) {}
-func (testLogger) SetLevel(schemas.LogLevel) {}
+func (testLogger) Debug(string, ...any)                   {}
+func (testLogger) Info(string, ...any)                    {}
+func (testLogger) Warn(string, ...any)                    {}
+func (testLogger) Error(string, ...any)                   {}
+func (testLogger) Fatal(string, ...any)                   {}
+func (testLogger) SetLevel(schemas.LogLevel)              {}
 func (testLogger) SetOutputType(schemas.LoggerOutputType) {}
 func (testLogger) LogHTTPRequest(schemas.LogLevel, string) schemas.LogEventBuilder {
 	return schemas.NoopLogEvent
@@ -89,6 +89,29 @@ func TestPublishingConfigStore_NoPublishOnRollback(t *testing.T) {
 
 	ev := readLastStreamEvent(t, client)
 	assert.Nil(t, ev)
+}
+
+func TestPublishingConfigStore_NoPublishOnRollbackAfterWrite(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client)
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	err := pcs.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
+		if err := pcs.AddProvider(ctx, "anthropic", ProviderConfig{
+			Keys: []schemas.Key{
+				{ID: "k-rollback", Name: "n", Value: *schemas.NewEnvVar("sk-x"), Weight: 1},
+			},
+		}, tx); err != nil {
+			return err
+		}
+		return errors.New("forced rollback after write")
+	})
+	require.Error(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	assert.Nil(t, ev, "stream must have no event when transaction rolls back after scheduling")
 }
 
 func TestPublishingConfigStore_NilSyncer_Passthrough(t *testing.T) {
