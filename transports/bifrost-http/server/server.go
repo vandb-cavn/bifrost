@@ -23,8 +23,8 @@ import (
 	"github.com/maximhq/bifrost/framework"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
-	"github.com/maximhq/bifrost/framework/modelcatalog"
 	"github.com/maximhq/bifrost/framework/logstore"
+	"github.com/maximhq/bifrost/framework/modelcatalog"
 	dynamicPlugins "github.com/maximhq/bifrost/framework/plugins"
 	"github.com/maximhq/bifrost/framework/tracing"
 	"github.com/maximhq/bifrost/plugins/governance"
@@ -848,16 +848,12 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 		logger.Warn("FullReload: proxy config reload failed: %v", err)
 	}
 
-	// Framework config — update FrameworkConfig.Pricing fields then call UpdateSyncConfig.
+	// Framework config — map DB row into FrameworkConfig.Pricing then call UpdateSyncConfig.
 	if dbFwConfig, err := s.Config.ConfigStore.GetFrameworkConfig(ctx); err == nil && dbFwConfig != nil {
 		if s.Config.FrameworkConfig == nil {
 			s.Config.FrameworkConfig = &framework.FrameworkConfig{}
 		}
-		if s.Config.FrameworkConfig.Pricing == nil {
-			s.Config.FrameworkConfig.Pricing = &modelcatalog.Config{}
-		}
-		s.Config.FrameworkConfig.Pricing.PricingURL = dbFwConfig.PricingURL
-		s.Config.FrameworkConfig.Pricing.PricingSyncInterval = dbFwConfig.PricingSyncInterval
+		s.Config.FrameworkConfig.Pricing = frameworkPricingConfig(dbFwConfig)
 		if err := s.UpdateSyncConfig(ctx); err != nil {
 			logger.Warn("FullReload: framework config sync failed: %v", err)
 		}
@@ -1237,17 +1233,12 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 			logger.Warn("cluster: proxy config reload failed: %v", err)
 		}
 	case "framework_config":
-		// Read TableFrameworkConfig from DB, map pricing fields into modelcatalog.Config,
-		// update s.Config.FrameworkConfig.Pricing, then call UpdateSyncConfig.
+		// Read TableFrameworkConfig from DB, map pricing fields, then call UpdateSyncConfig.
 		if dbConfig, err := s.Config.ConfigStore.GetFrameworkConfig(ctx); err == nil && dbConfig != nil {
 			if s.Config.FrameworkConfig == nil {
 				s.Config.FrameworkConfig = &framework.FrameworkConfig{}
 			}
-			if s.Config.FrameworkConfig.Pricing == nil {
-				s.Config.FrameworkConfig.Pricing = &modelcatalog.Config{}
-			}
-			s.Config.FrameworkConfig.Pricing.PricingURL = dbConfig.PricingURL
-			s.Config.FrameworkConfig.Pricing.PricingSyncInterval = dbConfig.PricingSyncInterval
+			s.Config.FrameworkConfig.Pricing = frameworkPricingConfig(dbConfig)
 			if err := s.UpdateSyncConfig(ctx); err != nil {
 				logger.Warn("cluster: framework config sync failed: %v", err)
 			}
@@ -1430,8 +1421,21 @@ func (s *BifrostHTTPServer) ReloadProxyConfig(ctx context.Context, config *table
 	}
 	// Store the proxy config in memory for use by components that need it
 	s.Config.ProxyConfig = config
+	if config == nil {
+		logger.Info("proxy configuration cleared (no proxy in config store)")
+		return nil
+	}
 	logger.Info("proxy configuration reloaded: enabled=%t, type=%s", config.Enabled, config.Type)
 	return nil
+}
+
+// frameworkPricingConfig maps a DB framework row to the in-memory modelcatalog pricing config.
+// handleConfigSyncEvent and FullReload both use this so new TableFrameworkConfig fields stay consistent.
+func frameworkPricingConfig(db *tables.TableFrameworkConfig) *modelcatalog.Config {
+	return &modelcatalog.Config{
+		PricingURL:          db.PricingURL,
+		PricingSyncInterval: db.PricingSyncInterval,
+	}
 }
 
 // ReloadHeaderFilterConfig reloads the header filter configuration

@@ -505,6 +505,18 @@ func (mc *ModelCatalog) PricingOverrideCount() int {
 	return len(mc.rawOverrides)
 }
 
+// NewBareCatalog returns a ModelCatalog with empty pricing and model maps. It supports only
+// isolated in-memory pricing override operations (for example transport-layer tests). Do not
+// use for full routing, URL sync, or production inference paths.
+func NewBareCatalog() *ModelCatalog {
+	return &ModelCatalog{
+		modelPool:           make(map[schemas.ModelProvider][]string),
+		unfilteredModelPool: make(map[schemas.ModelProvider][]string),
+		baseModelIndex:      make(map[string]string),
+		pricingData:         make(map[string]configstoreTables.TableModelPricing),
+	}
+}
+
 // IsTextCompletionSupported checks if a model supports text completion for the given provider.
 // Returns true if the model has pricing data for text completion ("text_completion"),
 // false otherwise. This is used by the litellmcompat plugin to determine whether to

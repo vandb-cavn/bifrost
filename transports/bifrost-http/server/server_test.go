@@ -379,7 +379,7 @@ func TestHandleConfigSync_PricingOverrideUpsert(t *testing.T) {
 		RDBConfigStore: testRDBConfigBase(t),
 		override:       override,
 	}
-	catalog := modelcatalog.NewMinimalCatalogForHandlerTests()
+	catalog := modelcatalog.NewBareCatalog()
 
 	s := &BifrostHTTPServer{
 		Config: &lib.Config{
@@ -397,13 +397,23 @@ func TestHandleConfigSync_PricingOverrideUpsert(t *testing.T) {
 	require.Equal(t, 1, catalog.PricingOverrideCount())
 }
 
+func TestReloadProxyConfig_NilClearsInMemory(t *testing.T) {
+	s := &BifrostHTTPServer{
+		Config: &lib.Config{
+			ProxyConfig: &tables.GlobalProxyConfig{Enabled: true, Type: "http"},
+		},
+	}
+	require.NoError(t, s.ReloadProxyConfig(context.Background(), nil))
+	assert.Nil(t, s.Config.ProxyConfig)
+}
+
 func TestHandleConfigSync_PricingOverrideDelete(t *testing.T) {
 	override := validTestPricingOverride("po-del", "To Delete")
 	st := &configSyncPricingTestStore{
 		RDBConfigStore: testRDBConfigBase(t),
 		override:       override,
 	}
-	catalog := modelcatalog.NewMinimalCatalogForHandlerTests()
+	catalog := modelcatalog.NewBareCatalog()
 	require.NoError(t, catalog.UpsertPricingOverrides(override))
 
 	s := &BifrostHTTPServer{
