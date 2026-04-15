@@ -207,8 +207,14 @@ Reload order (dependencies first):
    For each customer: ReloadCustomer(ctx, id)        │
    For each routing rule: ReloadRoutingRule(ctx, id) ┘
 5. For each MCP client: ReconnectMCPClient(ctx, id)
-6. Plugins: reload only if plugin config has changed since last load
-             (plugins carry side effects; unconditional reload is avoided)
+6. Plugin reconciliation (DB-authoritative):
+   a. db_plugins  = SELECT * FROM plugins WHERE enabled = true
+   b. mem_plugins = server.GetPluginStatus(ctx) → map[name]pluginState
+   c. in db_plugins, not in mem_plugins          → ReloadPlugin(ctx, name, path, cfg, placement, order)
+   d. in mem_plugins, not in db_plugins          → RemovePlugin(ctx, name)
+   e. in both, config/path/placement/order differs → ReloadPlugin(ctx, name, ...)
+   f. in both, disabled in DB                    → RemovePlugin(ctx, name)
+   Plugins carry side effects; the DB list is the single source of truth.
 ```
 
 Full reload is also triggered when:
@@ -398,6 +404,26 @@ During a Redis outage, nodes fall back to local `sync.Map` counters. When Redis 
 
 The last-writer overwrites the others' contributions, silently undercounting.
 
+### `LastDBUsages*` initialization
+
+`LastDBUsages*` maps must be **initialized from Postgres-loaded values at startup**, not from zero. When the server loads rate limit and budget state from Postgres during startup, it sets:
+
+```
+LastDBUsagesRequestsRateLimits[id] = postgres_value
+LastDBUsagesTokensRateLimits[id]   = postgres_value
+LastDBUsagesBudgets[id]            = postgres_value
+```
+
+This is what makes `localDelta = inMemory - LastDBUsages[id]` correct in all cases:
+
+| Scenario | LastDBUsages[id] | inMemory | localDelta |
+|----------|-----------------|----------|------------|
+| Fresh start, no outage | postgres_baseline | postgres_baseline | 0 ✓ |
+| Crash + restart | postgres_baseline (re-init'd) | postgres_baseline | 0 ✓ (no overcounting) |
+| Running through outage | last_dump_value | last_dump_value + outage_delta | outage_delta ✓ |
+
+**Guarantee scope:** No usage data loss when a node **remains running** through a Redis outage. If a node crashes while Redis is down, its outage-period usage is lost — bounded to at most 10s of usage (one dump interval) for the crashed instance. This is the explicit OSS guarantee; a durable local WAL is out of scope.
+
 ### Recovery procedure (per node, on Redis reconnect)
 
 **Do not force-dump to Postgres before the Lua merge.** If this node dumps first, the Postgres baseline would already include this node's outage delta; adding `localDelta` again via `INCRBY` would double-count it.
@@ -407,8 +433,10 @@ For each rateLimitID and budgetID tracked locally:
 
   1. Compute localDelta (before any dump):
        localDelta = inMemoryValue - LastDBUsages[id]
-     LastDBUsages* maps in LocalGovernanceStore track the last value written
-     to Postgres by this node. This is the outage-period contribution of this node only.
+     LastDBUsages* are initialized from Postgres at startup and updated on every
+     successful dump. This is exactly this node's outage-period contribution.
+     On a fresh start or crash-restart, LastDBUsages[id] = postgres_baseline
+     and localDelta = 0 — the node contributes nothing (correct: no outage delta).
 
   2. Read postgres_baseline directly from Postgres (stale — this is correct):
        postgres_baseline = current value in Postgres for this counter
@@ -425,7 +453,9 @@ For each rateLimitID and budgetID tracked locally:
 if redis.call('EXISTS', KEYS[1]) == 0 then
     redis.call('SET', KEYS[1], ARGV[1])   -- initialize from Postgres baseline
 end
-redis.call('INCRBY', KEYS[1], ARGV[2])    -- add this node's outage-period delta
+if tonumber(ARGV[2]) > 0 then
+    redis.call('INCRBY', KEYS[1], ARGV[2])  -- add this node's outage-period delta
+end
 return redis.call('GET', KEYS[1])
 ```
 
@@ -447,7 +477,7 @@ Multiple nodes calling the Lua script independently produce a correct result:
 - Second node: Redis key exists → skip SET → `INCRBY localDelta_B`
 - Final value: `postgres_baseline + localDelta_A + localDelta_B` = cluster-wide usage ✓
 
-`postgres_baseline` is the cluster's last-known-good value before the outage. Each `localDelta` is exactly one node's contribution during the outage. No contribution is double-counted because `localDelta` is computed from `LastDBUsages` (what was in Postgres before this node started accumulating locally), not from the current Postgres value.
+`postgres_baseline` is the cluster's last-known-good value before the outage. Each `localDelta` is exactly one node's contribution during the outage. No contribution is double-counted because `LastDBUsages[id]` is initialized from Postgres at startup and updated on every successful dump — it always represents "what Postgres already knows about this node's usage."
 
 ### TTL on recovery
 
@@ -578,7 +608,11 @@ Mode switching uses `atomic.Bool redisAvailable` — no restart needed.
 - `TestRecoveryMerge_NoDoublCount` — forced dump before merge is NOT done; localDelta = inMemory - LastDBUsages (not from fresh Postgres)
 - `TestRecoveryMerge_PartialFailure` — if any counter merge fails, redisAvailable stays false; reads remain on local sync.Map
 - `TestFullReload_Idempotent` — calling server.FullReload(ctx) twice produces identical in-memory state
-- `TestFullReload_Order` — verify reload order: client config → providers → governance → MCP → plugins
+- `TestFullReload_Order` — verify reload order: client config → providers → governance → MCP → plugins (reconciliation)
+- `TestFullReload_PluginReconcile_Delete` — plugin in memory but not DB → RemovePlugin called
+- `TestFullReload_PluginReconcile_Disabled` — plugin disabled in DB → RemovePlugin called
+- `TestLastDBUsages_InitFromPostgres` — after Postgres load, LastDBUsages[id] = postgres_value; localDelta on first recovery merge = 0
+- `TestRecoveryMerge_CrashRestart` — node crashes and restarts; LastDBUsages re-init'd from Postgres; localDelta = 0; no overcounting in Redis
 - `TestWatermarkFirstReload_NoGap` — events committed after watermark W appear in stream and are caught by XREAD from W
 
 ### Integration tests (real Redis + Postgres, added to `make test-plugins`)
@@ -604,7 +638,7 @@ Uses `miniredis` for unit tests; real Redis (via Docker Compose) for integration
 | `framework/configstore/cluster_syncer.go` | New: `ClusterSyncer` interface + Redis Streams implementation |
 | `framework/configstore/publishing_config_store.go` | New: `PublishingConfigStore` decorator; `ExecuteTransaction` as single publish choke point; `eventAccumulator` context type |
 | `framework/configstore/publishing_config_store_test.go` | New: unit tests with miniredis |
-| `plugins/governance/store.go` | Update Check functions to read Redis; Update functions to write INCRBY/INCRBYFLOAT to Redis; add Lua recovery merge |
+| `plugins/governance/store.go` | Update Check functions to read Redis; Update functions to write INCRBY/INCRBYFLOAT to Redis; initialize `LastDBUsages*` from Postgres-loaded values at startup; add Lua recovery merge |
 | `plugins/governance/tracker.go` | Update `DumpRateLimits`/`DumpBudgets` to read from Redis; add forced-dump path for recovery |
 | `plugins/governance/multinode_test.go` | New: multi-node integration tests |
 | `transports/bifrost-http/server/server.go` | Add `FullReload(ctx)` (idempotent, ordered); add XREAD consumer goroutine with watermark-first reload; wire `PublishingConfigStore` at startup; add `ClusterSyncer` and `consumerID` to server; add recovery bootstrap sequence |
