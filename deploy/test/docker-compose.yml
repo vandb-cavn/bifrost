@@ -1,5 +1,7 @@
 # Bifrost OSS deploy smoke test: Postgres + Redis + HTTP gateway (multi-node cluster hooks).
 #
+# Image build uses transports/Dockerfile (repo root as context — no symlink; portable with Buildx).
+#
 # From repository root:
 #   docker compose -f deploy/test/docker-compose.yml build
 #   docker compose -f deploy/test/docker-compose.yml up
@@ -46,7 +48,7 @@ services:
     image: bifrost:test
     build:
       context: ../..
-      dockerfile: deploy/test/Dockerfile
+      dockerfile: transports/Dockerfile
       args:
         VERSION: test
     depends_on:
