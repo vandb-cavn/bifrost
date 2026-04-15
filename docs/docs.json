@@ -421,6 +421,7 @@
             "pages": [
               "deployment-guides/how-to/install-make",
               "deployment-guides/how-to/multinode",
+              "deployment-guides/how-to/oss-cluster-config",
               "deployment-guides/docker-tuning"
             ]
           }

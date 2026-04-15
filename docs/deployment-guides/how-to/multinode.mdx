@@ -8,26 +8,23 @@ icon: "layer-group"
 
 Running multiple Bifrost nodes provides high availability, load distribution, and fault tolerance for your AI gateway. This guide covers the recommended approach for deploying multiple Bifrost nodes in OSS deployments.
 
+<Info>
+  **PostgreSQL + Redis (OSS cluster):** If all nodes share one Postgres `config_store` and you configure the optional `cluster` block (Redis Streams + shared counters), configuration and governance counters can stay consistent across nodes without sharing a single `config.json` file. See [Cấu hình cluster OSS (Redis)](/deployment-guides/how-to/oss-cluster-config) (Vietnamese guide with field reference).
+</Info>
+
 <Warning>
-  Running multiple OSS Bifrost nodes with a Postgres backend is not supported.
-  
-  Here is the short technical explanation:
-  
-  - Bifrost is designed to keep all critical information in memory, including provider configs, API keys, budgets, usage, and traffic distribution.
-  - Once a node is initialized, it does not read this information back from the database.
-  - In the Enterprise version, we use a slightly modified version of RAFT to synchronize this state in real time across nodes, while the database acts only as a dumb store.
-  - Based on our current view, OSS is sufficient for startups and medium-scale teams, and can easily handle around 3,000–5,000 RPS on a single instance.
-  - If you need high availability and enterprise capabilities such as real-time synchronization, the Enterprise plan is the right fit. 
-  - And yes, that is part of how we draw the OSS vs Enterprise line 💰.
+  **Postgres `config_store` on multiple OSS nodes:** If each node has its own database or you do **not** use the shared **`cluster`** Redis settings, in-memory configuration and governance state will **diverge** between nodes. Use either (1) a **shared `config.json`** without `config_store` (this page), or (2) **one shared Postgres** plus **`cluster.redis`** — see [Cấu hình cluster OSS (Redis)](/deployment-guides/how-to/oss-cluster-config).
+
+  Enterprise deployments can use **P2P clustering** (gossip) on top of the database; see [Clustering](/enterprise/clustering) for that product line.
 </Warning>
 
 ### OSS vs Enterprise
 
 | Aspect | OSS Approach | Enterprise Approach |
 |--------|--------------|---------------------|
-| **Configuration Source** | Shared `config.json` file | Database with P2P sync |
-| **Sync Mechanism** | File sharing (ConfigMap, volumes) | Gossip protocol (real-time) |
-| **Config Updates** | Modify file + restart nodes | UI/API with automatic propagation |
+| **Configuration Source** | Shared `config.json`, *or* shared Postgres + optional `cluster` (Redis) | Database with P2P sync |
+| **Sync Mechanism** | File sharing; or Redis Streams + DB for OSS `cluster` | Gossip protocol (real-time) |
+| **Config Updates** | Modify file + restart; or UI/API with stream-driven reload on other nodes (OSS `cluster`) | UI/API with automatic propagation |
 
 ---
 
@@ -50,6 +47,10 @@ When you deploy without `config_store`:
 ---
 
 ## Why not to use `config_store` for Multinode OSS?
+
+<Note>
+  If you use **one shared Postgres** and the **`cluster`** block with Redis, UI/API updates can propagate to other nodes — see [Cấu hình cluster OSS (Redis)](/deployment-guides/how-to/oss-cluster-config). The synchronization problem below applies when **that** setup is **not** used.
+</Note>
 
 Using `config_store` (database-backed configuration) with multiple nodes in OSS creates a **synchronization problem**:
 
@@ -438,7 +439,7 @@ resources:
 | Scenario | Recommendation |
 |----------|----------------|
 | Single node | Use `config_store` for UI access |
-| Multinode OSS | Use shared `config.json` without `config_store` |
+| Multinode OSS | Shared `config.json` without `config_store`, **or** shared Postgres + `cluster` + Redis ([guide](/deployment-guides/how-to/oss-cluster-config)) |
 | Multinode Enterprise | Use P2P clustering with `config_store` |
 
 For OSS multinode deployments, the shared `config.json` approach provides a simple, reliable way to keep all nodes in sync without the complexity of database synchronization.
