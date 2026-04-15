@@ -499,6 +499,8 @@ func (mc *ModelCatalog) DeletePricingOverride(id string) {
 }
 
 // PricingOverrideCount returns the number of in-memory pricing overrides.
+// Exported so other packages' tests (e.g. transports/bifrost-http/server) can assert
+// override state; *_test.go helpers are not visible across package boundaries.
 func (mc *ModelCatalog) PricingOverrideCount() int {
 	mc.overridesMu.RLock()
 	defer mc.overridesMu.RUnlock()
@@ -508,6 +510,9 @@ func (mc *ModelCatalog) PricingOverrideCount() int {
 // NewBareCatalog returns a ModelCatalog with empty pricing and model maps. It supports only
 // isolated in-memory pricing override operations (for example transport-layer tests). Do not
 // use for full routing, URL sync, or production inference paths.
+//
+// This must stay in non-_test.go: external test packages cannot import modelcatalog's *_test.go,
+// and ModelCatalog cannot be constructed from outside without an exported constructor.
 func NewBareCatalog() *ModelCatalog {
 	return &ModelCatalog{
 		modelPool:           make(map[schemas.ModelProvider][]string),

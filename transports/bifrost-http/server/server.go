@@ -842,6 +842,8 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 	}
 
 	// Proxy config — update s.Config.ProxyConfig in-memory.
+	// When the store has no proxy row, GetProxyConfig returns (nil, nil). We must still call
+	// ReloadProxyConfig with nil so in-memory proxy is cleared (do not add && proxyConfig != nil).
 	if proxyConfig, err := s.Config.ConfigStore.GetProxyConfig(ctx); err == nil {
 		_ = s.ReloadProxyConfig(ctx, proxyConfig)
 	} else {
@@ -1227,6 +1229,7 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		}
 	case "proxy_config":
 		// ReloadProxyConfig is in-memory only (sets s.Config.ProxyConfig).
+		// (nil, nil) from GetProxyConfig means no proxy in DB — pass nil through to clear RAM.
 		if config, err := s.Config.ConfigStore.GetProxyConfig(ctx); err == nil {
 			_ = s.ReloadProxyConfig(ctx, config)
 		} else {
