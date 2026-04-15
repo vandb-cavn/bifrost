@@ -207,7 +207,35 @@ func (s *RedisClusterSyncer) readLoop(
 }
 
 func (s *RedisClusterSyncer) loadCursor(ctx context.Context, key string) (string, error) {
-	return s.client.Get(ctx, key).Result()
+	id, err := s.client.Get(ctx, key).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", nil
+		}
+		return "", err
+	}
+	if id != "" {
+		if err := validateRedisStreamCursor(id); err != nil {
+			return "", err
+		}
+	}
+	return id, nil
+}
+
+// validateRedisStreamCursor rejects malformed persisted cursors so gap detection does not
+// treat arbitrary strings as the numeric id "0-0".
+func validateRedisStreamCursor(s string) error {
+	for i, c := range s {
+		if c == '-' && i > 0 && i < len(s)-1 {
+			_, err1 := strconv.ParseUint(s[:i], 10, 64)
+			_, err2 := strconv.ParseUint(s[i+1:], 10, 64)
+			if err1 != nil || err2 != nil {
+				return fmt.Errorf("invalid cluster stream cursor %q", s)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid cluster stream cursor %q", s)
 }
 
 // Close implements ClusterSyncer. The redis client is owned by the caller and is not closed.

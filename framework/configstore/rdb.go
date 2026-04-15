@@ -26,6 +26,16 @@ type RDBConfigStore struct {
 	logger schemas.Logger
 }
 
+// NewRDBConfigStoreForTest returns an RDBConfigStore over an existing *gorm.DB.
+// The database must already be migrated for the tables the test exercises.
+// Intended for integration tests in dependent modules (for example plugins/governance).
+func NewRDBConfigStoreForTest(db *gorm.DB) *RDBConfigStore {
+	if db == nil {
+		panic("configstore: NewRDBConfigStoreForTest(nil)")
+	}
+	return &RDBConfigStore{db: db, logger: nil}
+}
+
 // getWeight safely dereferences a *float64 weight pointer, returning 1.0 as default if nil.
 // This allows distinguishing between "not set" (nil -> 1.0) and "explicitly set to 0" (0.0).
 func getWeight(w *float64) float64 {

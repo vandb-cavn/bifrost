@@ -144,6 +144,8 @@ type BifrostHTTPServer struct {
 	clusterCtx         context.Context
 	clusterCancel      context.CancelFunc
 	clusterEventNodeID string
+
+	fullReloadMu sync.Mutex // serializes FullReload to avoid overlapping snapshots / spurious removes
 }
 
 var logger schemas.Logger
@@ -811,6 +813,9 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 		return fmt.Errorf("bifrost client not initialized")
 	}
 
+	s.fullReloadMu.Lock()
+	defer s.fullReloadMu.Unlock()
+
 	govOK := s.Config.IsPluginLoaded(s.getGovernancePluginName())
 	var govData *governance.GovernanceData
 	if govOK {
@@ -1001,7 +1006,7 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 		return fmt.Errorf("list plugins from DB: %w", err)
 	}
 
-	memPlugins := s.GetPluginStatus(ctx)
+	memPluginsBefore := s.GetPluginStatus(ctx)
 
 	dbEnabled := make(map[string]*tables.TablePlugin)
 	for _, p := range dbPlugins {
@@ -1011,14 +1016,14 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 	}
 
 	for name, p := range dbEnabled {
-		if _, inMem := memPlugins[name]; !inMem {
+		if _, inMem := memPluginsBefore[name]; !inMem {
 			if err := s.ReloadPlugin(ctx, name, p.Path, p.Config, p.Placement, p.Order); err != nil {
 				logger.Warn("reconcilePlugins: failed to load plugin %s: %v", name, err)
 			}
 		}
 	}
 
-	for internalName, st := range memPlugins {
+	for internalName, st := range memPluginsBefore {
 		if _, inDB := dbEnabled[internalName]; !inDB {
 			if err := s.RemovePlugin(ctx, st.Name); err != nil {
 				logger.Warn("reconcilePlugins: failed to remove plugin %s: %v", internalName, err)
@@ -1026,15 +1031,21 @@ func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
 		}
 	}
 
+	memPluginsNow := s.GetPluginStatus(ctx)
 	for name, p := range dbEnabled {
-		if _, inMem := memPlugins[name]; inMem {
-			mem := s.getPluginConfig(name)
-			if pluginConfigMatchesDB(mem, p) {
-				continue
-			}
-			if err := s.ReloadPlugin(ctx, name, p.Path, p.Config, p.Placement, p.Order); err != nil {
-				logger.Warn("reconcilePlugins: failed to reload plugin %s: %v", name, err)
-			}
+		if _, nowInMem := memPluginsNow[name]; !nowInMem {
+			continue
+		}
+		if _, wasBefore := memPluginsBefore[name]; !wasBefore {
+			// Loaded in the first loop this cycle; config already matches DB — skip redundant reload.
+			continue
+		}
+		mem := s.getPluginConfig(name)
+		if pluginConfigMatchesDB(mem, p) {
+			continue
+		}
+		if err := s.ReloadPlugin(ctx, name, p.Path, p.Config, p.Placement, p.Order); err != nil {
+			logger.Warn("reconcilePlugins: failed to reload plugin %s: %v", name, err)
 		}
 	}
 
@@ -1104,6 +1115,9 @@ func jsonConfigEqualNormalized(a, b any) bool {
 
 func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEvent) {
 	ctx := context.Background()
+	if s.clusterCtx != nil {
+		ctx = s.clusterCtx
+	}
 
 	switch event.Type {
 	case "full_reload":

@@ -284,8 +284,13 @@ func (gs *LocalGovernanceStore) RunRecoveryMerge(ctx context.Context) bool {
 		reqDelta := snap.inMemRequests - snap.lastDBRequests
 
 		rl, err := gs.configStore.GetRateLimit(ctx, snap.id)
-		if err != nil || rl == nil {
-			continue
+		if err != nil {
+			gs.logger.Error("recovery merge: get rate limit %s from db: %v", snap.id, err)
+			return false
+		}
+		if rl == nil {
+			gs.logger.Error("recovery merge: get rate limit %s from db: nil row", snap.id)
+			return false
 		}
 
 		tokenKey := fmt.Sprintf("bifrost:rl:%s:tokens", snap.id)
@@ -326,8 +331,13 @@ func (gs *LocalGovernanceStore) RunRecoveryMerge(ctx context.Context) bool {
 		delta := snap.inMem - snap.lastDB
 
 		budget, err := gs.configStore.GetBudget(ctx, snap.id)
-		if err != nil || budget == nil {
-			continue
+		if err != nil {
+			gs.logger.Error("recovery merge: get budget %s from db: %v", snap.id, err)
+			return false
+		}
+		if budget == nil {
+			gs.logger.Error("recovery merge: get budget %s from db: nil row", snap.id)
+			return false
 		}
 
 		key := fmt.Sprintf("bifrost:budget:%s:spent", snap.id)
@@ -2158,16 +2168,16 @@ func (gs *LocalGovernanceStore) DumpRateLimits(ctx context.Context, tokenBaselin
 			}
 			return fmt.Errorf("failed to dump rate limits to database: %w", err)
 		}
-		if gs.IsRedisAvailable() && gs.redisCounters != nil {
-			for _, u := range rateLimitUpdates {
-				gs.LastDBUsagesRateLimitsTokensMu.Lock()
-				gs.LastDBUsagesTokensRateLimits[u.ID] = u.TokenCurrentUsage
-				gs.LastDBUsagesRateLimitsTokensMu.Unlock()
-				gs.LastDBUsagesRateLimitsRequestsMu.Lock()
-				gs.LastDBUsagesRequestsRateLimits[u.ID] = u.RequestCurrentUsage
-				gs.LastDBUsagesRateLimitsRequestsMu.Unlock()
-			}
+		// LastDBUsages must track the last successfully persisted values on every dump
+		// (not only when Redis is available) so RunRecoveryMerge deltas stay correct after Redis recovery.
+		gs.LastDBUsagesRateLimitsTokensMu.Lock()
+		gs.LastDBUsagesRateLimitsRequestsMu.Lock()
+		for _, u := range rateLimitUpdates {
+			gs.LastDBUsagesTokensRateLimits[u.ID] = u.TokenCurrentUsage
+			gs.LastDBUsagesRequestsRateLimits[u.ID] = u.RequestCurrentUsage
 		}
+		gs.LastDBUsagesRateLimitsRequestsMu.Unlock()
+		gs.LastDBUsagesRateLimitsTokensMu.Unlock()
 	}
 	return nil
 }
@@ -2230,11 +2240,6 @@ func (gs *LocalGovernanceStore) DumpBudgets(ctx context.Context, baselines map[s
 				if result.Error != nil {
 					return fmt.Errorf("failed to update budget %s: %w", u.id, result.Error)
 				}
-				if gs.IsRedisAvailable() && gs.redisCounters != nil {
-					gs.LastDBUsagesBudgetsMu.Lock()
-					gs.LastDBUsagesBudgets[u.id] = u.newUsage
-					gs.LastDBUsagesBudgetsMu.Unlock()
-				}
 			}
 			return nil
 		}); err != nil {
@@ -2252,6 +2257,11 @@ func (gs *LocalGovernanceStore) DumpBudgets(ctx context.Context, baselines map[s
 			}
 			return fmt.Errorf("failed to dump budgets to database: %w", err)
 		}
+		gs.LastDBUsagesBudgetsMu.Lock()
+		for _, u := range budgetUpdates {
+			gs.LastDBUsagesBudgets[u.id] = u.newUsage
+		}
+		gs.LastDBUsagesBudgetsMu.Unlock()
 	}
 
 	return nil
@@ -2563,17 +2573,18 @@ func (gs *LocalGovernanceStore) rebuildInMemoryStructures(ctx context.Context, c
 	}
 	gs.LastDBUsagesBudgetsMu.Unlock()
 
-	gs.LastDBUsagesRateLimitsRequestsMu.Lock()
+	// Lock order: TokensMu before RequestsMu (matches RunRecoveryMerge and DumpRateLimits).
 	gs.LastDBUsagesRateLimitsTokensMu.Lock()
-	gs.LastDBUsagesRequestsRateLimits = make(map[string]int64)
+	gs.LastDBUsagesRateLimitsRequestsMu.Lock()
 	gs.LastDBUsagesTokensRateLimits = make(map[string]int64)
+	gs.LastDBUsagesRequestsRateLimits = make(map[string]int64)
 	for i := range rateLimits {
 		rateLimit := &rateLimits[i]
-		gs.LastDBUsagesRequestsRateLimits[rateLimit.ID] = rateLimit.RequestCurrentUsage
 		gs.LastDBUsagesTokensRateLimits[rateLimit.ID] = rateLimit.TokenCurrentUsage
+		gs.LastDBUsagesRequestsRateLimits[rateLimit.ID] = rateLimit.RequestCurrentUsage
 	}
-	gs.LastDBUsagesRateLimitsTokensMu.Unlock()
 	gs.LastDBUsagesRateLimitsRequestsMu.Unlock()
+	gs.LastDBUsagesRateLimitsTokensMu.Unlock()
 }
 
 // UTILITY FUNCTIONS

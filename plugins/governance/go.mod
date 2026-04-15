@@ -14,6 +14,7 @@ require (
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/stretchr/testify v1.11.1
 	github.com/valyala/fasthttp v1.68.0
+	gorm.io/driver/sqlite v1.6.0
 )
 
 require (
@@ -162,5 +163,8 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/postgres v1.6.0 // indirect
-	gorm.io/driver/sqlite v1.6.0 // indirect
 )
+
+replace github.com/maximhq/bifrost/framework => ../../framework
+
+replace github.com/maximhq/bifrost/core => ../../core
