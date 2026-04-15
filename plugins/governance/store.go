@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -14,6 +15,7 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -50,6 +52,11 @@ type LocalGovernanceStore struct {
 
 	// Logger
 	logger schemas.Logger
+
+	// Multi-node Redis counters (nil in single-node mode)
+	redisCounters *RedisCounterClient
+	// redisAvailable gates Redis read/write paths; only true after successful recovery merge.
+	redisAvailable atomic.Bool
 }
 
 type GovernanceData struct {
@@ -188,6 +195,149 @@ func NewLocalGovernanceStore(ctx context.Context, logger schemas.Logger, configS
 
 	store.logger.Info("governance store initialized successfully")
 	return store, nil
+}
+
+func (gs *LocalGovernanceStore) clusterRateUsage(ctx context.Context, rl *configstoreTables.TableRateLimit, tokenBaseline, reqBaseline int64) (int64, int64) {
+	tokens := rl.TokenCurrentUsage + tokenBaseline
+	reqs := rl.RequestCurrentUsage + reqBaseline
+	if gs.redisAvailable.Load() && gs.redisCounters != nil {
+		if t, err := gs.redisCounters.GetTokens(ctx, rl.ID); err == nil {
+			tokens = t
+		}
+		if r, err := gs.redisCounters.GetRequests(ctx, rl.ID); err == nil {
+			reqs = r
+		}
+	}
+	return tokens, reqs
+}
+
+func (gs *LocalGovernanceStore) clusterBudgetSpent(ctx context.Context, b *configstoreTables.TableBudget, baseline float64) float64 {
+	spent := b.CurrentUsage + baseline
+	if gs.redisAvailable.Load() && gs.redisCounters != nil {
+		if s, err := gs.redisCounters.GetBudget(ctx, b.ID); err == nil {
+			return s
+		}
+	}
+	return spent
+}
+
+// InitRedis attaches a Redis client and runs recovery merge. Returns true if merge succeeded.
+func (gs *LocalGovernanceStore) InitRedis(ctx context.Context, client redis.UniversalClient) bool {
+	if client == nil {
+		return false
+	}
+	gs.redisCounters = NewRedisCounterClient(client)
+	return gs.RunRecoveryMerge(ctx)
+}
+
+// SetRedisAvailable marks whether Redis is authoritative for counters.
+func (gs *LocalGovernanceStore) SetRedisAvailable(v bool) {
+	gs.redisAvailable.Store(v)
+}
+
+// GetRedisCounters returns the Redis counter client, or nil.
+func (gs *LocalGovernanceStore) GetRedisCounters() *RedisCounterClient {
+	return gs.redisCounters
+}
+
+// IsRedisAvailable reports whether Redis read paths are active.
+func (gs *LocalGovernanceStore) IsRedisAvailable() bool {
+	return gs.redisAvailable.Load()
+}
+
+// RunRecoveryMerge merges local outage deltas into Redis using Postgres baselines.
+func (gs *LocalGovernanceStore) RunRecoveryMerge(ctx context.Context) bool {
+	if gs.redisCounters == nil {
+		return false
+	}
+
+	gs.LastDBUsagesRateLimitsTokensMu.RLock()
+	gs.LastDBUsagesRateLimitsRequestsMu.RLock()
+	type rlSnapshot struct {
+		id             string
+		inMemTokens    int64
+		lastDBTokens   int64
+		inMemRequests  int64
+		lastDBRequests int64
+	}
+	var rlSnaps []rlSnapshot
+	gs.rateLimits.Range(func(key, value interface{}) bool {
+		rl, ok := value.(*configstoreTables.TableRateLimit)
+		if !ok || rl == nil {
+			return true
+		}
+		snap := rlSnapshot{
+			id:            rl.ID,
+			inMemTokens:   rl.TokenCurrentUsage,
+			inMemRequests: rl.RequestCurrentUsage,
+		}
+		snap.lastDBTokens = gs.LastDBUsagesTokensRateLimits[rl.ID]
+		snap.lastDBRequests = gs.LastDBUsagesRequestsRateLimits[rl.ID]
+		rlSnaps = append(rlSnaps, snap)
+		return true
+	})
+	gs.LastDBUsagesRateLimitsRequestsMu.RUnlock()
+	gs.LastDBUsagesRateLimitsTokensMu.RUnlock()
+
+	for _, snap := range rlSnaps {
+		tokenDelta := snap.inMemTokens - snap.lastDBTokens
+		reqDelta := snap.inMemRequests - snap.lastDBRequests
+
+		rl, err := gs.configStore.GetRateLimit(ctx, snap.id)
+		if err != nil || rl == nil {
+			continue
+		}
+
+		tokenKey := fmt.Sprintf("bifrost:rl:%s:tokens", snap.id)
+		requestKey := fmt.Sprintf("bifrost:rl:%s:requests", snap.id)
+
+		if err := gs.redisCounters.MergeDelta(ctx, tokenKey, rl.TokenCurrentUsage, tokenDelta); err != nil {
+			gs.logger.Error("recovery merge failed for %s tokens: %v", snap.id, err)
+			return false
+		}
+		if err := gs.redisCounters.MergeDelta(ctx, requestKey, rl.RequestCurrentUsage, reqDelta); err != nil {
+			gs.logger.Error("recovery merge failed for %s requests: %v", snap.id, err)
+			return false
+		}
+	}
+
+	type budgetSnapshot struct {
+		id     string
+		inMem  float64
+		lastDB float64
+	}
+	var bSnaps []budgetSnapshot
+	gs.LastDBUsagesBudgetsMu.RLock()
+	gs.budgets.Range(func(key, value interface{}) bool {
+		b, ok := value.(*configstoreTables.TableBudget)
+		if !ok || b == nil {
+			return true
+		}
+		bSnaps = append(bSnaps, budgetSnapshot{
+			id:     b.ID,
+			inMem:  b.CurrentUsage,
+			lastDB: gs.LastDBUsagesBudgets[b.ID],
+		})
+		return true
+	})
+	gs.LastDBUsagesBudgetsMu.RUnlock()
+
+	for _, snap := range bSnaps {
+		delta := snap.inMem - snap.lastDB
+
+		budget, err := gs.configStore.GetBudget(ctx, snap.id)
+		if err != nil || budget == nil {
+			continue
+		}
+
+		key := fmt.Sprintf("bifrost:budget:%s:spent", snap.id)
+		if err := gs.redisCounters.MergeBudgetDelta(ctx, key, budget.CurrentUsage, delta); err != nil {
+			gs.logger.Error("recovery merge failed for budget %s: %v", snap.id, err)
+			return false
+		}
+	}
+
+	return true
 }
 
 func (gs *LocalGovernanceStore) GetGovernanceData() *GovernanceData {
@@ -553,14 +703,14 @@ func (gs *LocalGovernanceStore) CheckBudget(ctx context.Context, vk *configstore
 			baseline = 0
 		}
 
+		spent := gs.clusterBudgetSpent(ctx, budget, baseline)
 		gs.logger.Debug("LocalStore CheckBudget: Checking %s budget %s: local=%.4f, remote=%.4f, total=%.4f, limit=%.4f",
-			budgetNames[i], budget.ID, budget.CurrentUsage, baseline, budget.CurrentUsage+baseline, budget.MaxLimit)
+			budgetNames[i], budget.ID, budget.CurrentUsage, baseline, spent, budget.MaxLimit)
 
-		// Check if current usage (local + remote baseline) exceeds budget limit
-		if budget.CurrentUsage+baseline >= budget.MaxLimit {
+		if spent >= budget.MaxLimit {
 			gs.logger.Debug("LocalStore CheckBudget: Budget %s EXCEEDED", budget.ID)
 			return fmt.Errorf("%s budget exceeded: %.4f >= %.4f dollars",
-				budgetNames[i], budget.CurrentUsage+baseline, budget.MaxLimit)
+				budgetNames[i], spent, budget.MaxLimit)
 		}
 	}
 
@@ -624,10 +774,10 @@ func (gs *LocalGovernanceStore) CheckProviderBudget(ctx context.Context, request
 		baseline = 0
 	}
 
-	// Check if current usage (local + remote baseline) exceeds budget limit
-	if budget.CurrentUsage+baseline >= budget.MaxLimit {
+	spent := gs.clusterBudgetSpent(ctx, budget, baseline)
+	if spent >= budget.MaxLimit {
 		return fmt.Errorf("%s budget exceeded: %.4f >= %.4f dollars",
-			providerKey, budget.CurrentUsage+baseline, budget.MaxLimit)
+			providerKey, spent, budget.MaxLimit)
 	}
 
 	return nil
@@ -708,26 +858,28 @@ func (gs *LocalGovernanceStore) CheckProviderRateLimit(ctx context.Context, requ
 		requestsBaseline = 0
 	}
 
+	tokenU, reqU := gs.clusterRateUsage(ctx, rateLimit, tokensBaseline, requestsBaseline)
+
 	// Token limits - check if total usage (local + remote baseline) exceeds limit
 	// Skip this check if token limit has expired
-	if !tokenLimitExpired && rateLimit.TokenMaxLimit != nil && rateLimit.TokenCurrentUsage+tokensBaseline >= *rateLimit.TokenMaxLimit {
+	if !tokenLimitExpired && rateLimit.TokenMaxLimit != nil && tokenU >= *rateLimit.TokenMaxLimit {
 		duration := "unknown"
 		if rateLimit.TokenResetDuration != nil {
 			duration = *rateLimit.TokenResetDuration
 		}
 		violations = append(violations, fmt.Sprintf("token limit exceeded (%d/%d, resets every %s)",
-			rateLimit.TokenCurrentUsage+tokensBaseline, *rateLimit.TokenMaxLimit, duration))
+			tokenU, *rateLimit.TokenMaxLimit, duration))
 	}
 
 	// Request limits - check if total usage (local + remote baseline) exceeds limit
 	// Skip this check if request limit has expired
-	if !requestLimitExpired && rateLimit.RequestMaxLimit != nil && rateLimit.RequestCurrentUsage+requestsBaseline >= *rateLimit.RequestMaxLimit {
+	if !requestLimitExpired && rateLimit.RequestMaxLimit != nil && reqU >= *rateLimit.RequestMaxLimit {
 		duration := "unknown"
 		if rateLimit.RequestResetDuration != nil {
 			duration = *rateLimit.RequestResetDuration
 		}
 		violations = append(violations, fmt.Sprintf("request limit exceeded (%d/%d, resets every %s)",
-			rateLimit.RequestCurrentUsage+requestsBaseline, *rateLimit.RequestMaxLimit, duration))
+			reqU, *rateLimit.RequestMaxLimit, duration))
 	}
 
 	if len(violations) > 0 {
@@ -844,10 +996,10 @@ func (gs *LocalGovernanceStore) CheckModelBudget(ctx context.Context, request *E
 			baseline = 0
 		}
 
-		// Check if current usage (local + remote baseline) exceeds budget limit
-		if budget.CurrentUsage+baseline >= budget.MaxLimit {
+		spent := gs.clusterBudgetSpent(ctx, budget, baseline)
+		if spent >= budget.MaxLimit {
 			return fmt.Errorf("%s budget exceeded: %.4f >= %.4f dollars",
-				budgetNames[i], budget.CurrentUsage+baseline, budget.MaxLimit)
+				budgetNames[i], spent, budget.MaxLimit)
 		}
 	}
 
@@ -889,8 +1041,9 @@ func (gs *LocalGovernanceStore) CheckUserBudget(ctx context.Context, userID stri
 	}
 
 	baseline := baselines[budget.ID]
-	if budget.CurrentUsage+baseline >= budget.MaxLimit {
-		return fmt.Errorf("user budget exceeded: %.4f >= %.4f dollars", budget.CurrentUsage+baseline, budget.MaxLimit)
+	spent := gs.clusterBudgetSpent(ctx, budget, baseline)
+	if spent >= budget.MaxLimit {
+		return fmt.Errorf("user budget exceeded: %.4f >= %.4f dollars", spent, budget.MaxLimit)
 	}
 
 	return nil
@@ -989,26 +1142,28 @@ func (gs *LocalGovernanceStore) CheckModelRateLimit(ctx context.Context, request
 			requestsBaseline = 0
 		}
 
+		tokenU, reqU := gs.clusterRateUsage(ctx, rateLimit, tokensBaseline, requestsBaseline)
+
 		// Token limits - check if total usage (local + remote baseline) exceeds limit
 		// Skip this check if token limit has expired
-		if !tokenLimitExpired && rateLimit.TokenMaxLimit != nil && rateLimit.TokenCurrentUsage+tokensBaseline >= *rateLimit.TokenMaxLimit {
+		if !tokenLimitExpired && rateLimit.TokenMaxLimit != nil && tokenU >= *rateLimit.TokenMaxLimit {
 			duration := "unknown"
 			if rateLimit.TokenResetDuration != nil {
 				duration = *rateLimit.TokenResetDuration
 			}
 			violations = append(violations, fmt.Sprintf("token limit exceeded (%d/%d, resets every %s)",
-				rateLimit.TokenCurrentUsage+tokensBaseline, *rateLimit.TokenMaxLimit, duration))
+				tokenU, *rateLimit.TokenMaxLimit, duration))
 		}
 
 		// Request limits - check if total usage (local + remote baseline) exceeds limit
 		// Skip this check if request limit has expired
-		if !requestLimitExpired && rateLimit.RequestMaxLimit != nil && rateLimit.RequestCurrentUsage+requestsBaseline >= *rateLimit.RequestMaxLimit {
+		if !requestLimitExpired && rateLimit.RequestMaxLimit != nil && reqU >= *rateLimit.RequestMaxLimit {
 			duration := "unknown"
 			if rateLimit.RequestResetDuration != nil {
 				duration = *rateLimit.RequestResetDuration
 			}
 			violations = append(violations, fmt.Sprintf("request limit exceeded (%d/%d, resets every %s)",
-				rateLimit.RequestCurrentUsage+requestsBaseline, *rateLimit.RequestMaxLimit, duration))
+				reqU, *rateLimit.RequestMaxLimit, duration))
 		}
 
 		if len(violations) > 0 {
@@ -1081,24 +1236,26 @@ func (gs *LocalGovernanceStore) CheckUserRateLimit(ctx context.Context, userID s
 	tokensBaseline := tokensBaselines[rateLimit.ID]
 	requestsBaseline := requestsBaselines[rateLimit.ID]
 
+	tokenU, reqU := gs.clusterRateUsage(ctx, rateLimit, tokensBaseline, requestsBaseline)
+
 	// Check token limit
-	if !tokenLimitExpired && rateLimit.TokenMaxLimit != nil && rateLimit.TokenCurrentUsage+tokensBaseline >= *rateLimit.TokenMaxLimit {
+	if !tokenLimitExpired && rateLimit.TokenMaxLimit != nil && tokenU >= *rateLimit.TokenMaxLimit {
 		duration := "unknown"
 		if rateLimit.TokenResetDuration != nil {
 			duration = *rateLimit.TokenResetDuration
 		}
 		violations = append(violations, fmt.Sprintf("user token limit exceeded (%d/%d, resets every %s)",
-			rateLimit.TokenCurrentUsage+tokensBaseline, *rateLimit.TokenMaxLimit, duration))
+			tokenU, *rateLimit.TokenMaxLimit, duration))
 	}
 
 	// Check request limit
-	if !requestLimitExpired && rateLimit.RequestMaxLimit != nil && rateLimit.RequestCurrentUsage+requestsBaseline >= *rateLimit.RequestMaxLimit {
+	if !requestLimitExpired && rateLimit.RequestMaxLimit != nil && reqU >= *rateLimit.RequestMaxLimit {
 		duration := "unknown"
 		if rateLimit.RequestResetDuration != nil {
 			duration = *rateLimit.RequestResetDuration
 		}
 		violations = append(violations, fmt.Sprintf("user request limit exceeded (%d/%d, resets every %s)",
-			rateLimit.RequestCurrentUsage+requestsBaseline, *rateLimit.RequestMaxLimit, duration))
+			reqU, *rateLimit.RequestMaxLimit, duration))
 	}
 
 	if len(violations) > 0 {
@@ -1173,26 +1330,28 @@ func (gs *LocalGovernanceStore) CheckRateLimit(ctx context.Context, vk *configst
 			requestsBaseline = 0
 		}
 
+		tokenU, reqU := gs.clusterRateUsage(ctx, rateLimit, tokensBaseline, requestsBaseline)
+
 		// Token limits - check if total usage (local + remote baseline) exceeds limit
 		// Only check if token limit is not expired
-		if !tokenExpired && rateLimit.TokenMaxLimit != nil && rateLimit.TokenCurrentUsage+tokensBaseline >= *rateLimit.TokenMaxLimit {
+		if !tokenExpired && rateLimit.TokenMaxLimit != nil && tokenU >= *rateLimit.TokenMaxLimit {
 			duration := "unknown"
 			if rateLimit.TokenResetDuration != nil {
 				duration = *rateLimit.TokenResetDuration
 			}
 			violations = append(violations, fmt.Sprintf("token limit exceeded (%d/%d, resets every %s)",
-				rateLimit.TokenCurrentUsage+tokensBaseline, *rateLimit.TokenMaxLimit, duration))
+				tokenU, *rateLimit.TokenMaxLimit, duration))
 		}
 
 		// Request limits - check if total usage (local + remote baseline) exceeds limit
 		// Only check if request limit is not expired
-		if !requestExpired && rateLimit.RequestMaxLimit != nil && rateLimit.RequestCurrentUsage+requestsBaseline >= *rateLimit.RequestMaxLimit {
+		if !requestExpired && rateLimit.RequestMaxLimit != nil && reqU >= *rateLimit.RequestMaxLimit {
 			duration := "unknown"
 			if rateLimit.RequestResetDuration != nil {
 				duration = *rateLimit.RequestResetDuration
 			}
 			violations = append(violations, fmt.Sprintf("request limit exceeded (%d/%d, resets every %s)",
-				rateLimit.RequestCurrentUsage+requestsBaseline, *rateLimit.RequestMaxLimit, duration))
+				reqU, *rateLimit.RequestMaxLimit, duration))
 		}
 
 		if len(violations) > 0 {
@@ -1244,6 +1403,11 @@ func (gs *LocalGovernanceStore) UpdateVirtualKeyBudgetUsageInMemory(ctx context.
 				// Update the clone
 				clone.CurrentUsage += cost
 				gs.budgets.Store(budgetID, &clone)
+				if gs.redisAvailable.Load() && gs.redisCounters != nil {
+					if _, err := gs.redisCounters.IncrBudget(ctx, budgetID, cost); err != nil {
+						gs.logger.Warn("redis IncrBudget failed for %s: %v", budgetID, err)
+					}
+				}
 				gs.logger.Debug("UpdateVirtualKeyBudgetUsageInMemory: Updated budget %s: %.4f -> %.4f (added %.4f)",
 					budgetID, oldUsage, clone.CurrentUsage, cost)
 			}
@@ -1276,6 +1440,11 @@ func (gs *LocalGovernanceStore) UpdateProviderAndModelBudgetUsageInMemory(ctx co
 				// Update the clone
 				clone.CurrentUsage += cost
 				gs.budgets.Store(budgetID, &clone)
+				if gs.redisAvailable.Load() && gs.redisCounters != nil {
+					if _, err := gs.redisCounters.IncrBudget(ctx, budgetID, cost); err != nil {
+						gs.logger.Warn("redis IncrBudget failed for %s: %v", budgetID, err)
+					}
+				}
 			}
 		}
 	}
@@ -1346,6 +1515,11 @@ func (gs *LocalGovernanceStore) UpdateUserBudgetUsageInMemory(ctx context.Contex
 	// Update the clone
 	clone.CurrentUsage += cost
 	gs.budgets.Store(clone.ID, &clone)
+	if gs.redisAvailable.Load() && gs.redisCounters != nil {
+		if _, err := gs.redisCounters.IncrBudget(ctx, clone.ID, cost); err != nil {
+			gs.logger.Warn("redis IncrBudget failed for %s: %v", clone.ID, err)
+		}
+	}
 
 	return nil
 }
@@ -1385,6 +1559,18 @@ func (gs *LocalGovernanceStore) UpdateProviderAndModelRateLimitUsageInMemory(ctx
 					clone.RequestCurrentUsage += 1
 				}
 				gs.rateLimits.Store(rateLimitID, &clone)
+				if gs.redisAvailable.Load() && gs.redisCounters != nil {
+					if shouldUpdateTokens {
+						if _, err := gs.redisCounters.IncrTokens(ctx, rateLimitID, tokensUsed); err != nil {
+							gs.logger.Warn("redis IncrTokens failed for %s: %v", rateLimitID, err)
+						}
+					}
+					if shouldUpdateRequests {
+						if _, err := gs.redisCounters.IncrRequests(ctx, rateLimitID, 1); err != nil {
+							gs.logger.Warn("redis IncrRequests failed for %s: %v", rateLimitID, err)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1464,6 +1650,18 @@ func (gs *LocalGovernanceStore) UpdateVirtualKeyRateLimitUsageInMemory(ctx conte
 					clone.RequestCurrentUsage += 1
 				}
 				gs.rateLimits.Store(rateLimitID, &clone)
+				if gs.redisAvailable.Load() && gs.redisCounters != nil {
+					if shouldUpdateTokens {
+						if _, err := gs.redisCounters.IncrTokens(ctx, rateLimitID, tokensUsed); err != nil {
+							gs.logger.Warn("redis IncrTokens failed for %s: %v", rateLimitID, err)
+						}
+					}
+					if shouldUpdateRequests {
+						if _, err := gs.redisCounters.IncrRequests(ctx, rateLimitID, 1); err != nil {
+							gs.logger.Warn("redis IncrRequests failed for %s: %v", rateLimitID, err)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1519,6 +1717,18 @@ func (gs *LocalGovernanceStore) UpdateUserRateLimitUsageInMemory(ctx context.Con
 		clone.RequestCurrentUsage++
 	}
 	gs.rateLimits.Store(clone.ID, &clone)
+	if gs.redisAvailable.Load() && gs.redisCounters != nil {
+		if shouldUpdateTokens {
+			if _, err := gs.redisCounters.IncrTokens(ctx, clone.ID, tokensUsed); err != nil {
+				gs.logger.Warn("redis IncrTokens failed for %s: %v", clone.ID, err)
+			}
+		}
+		if shouldUpdateRequests {
+			if _, err := gs.redisCounters.IncrRequests(ctx, clone.ID, 1); err != nil {
+				gs.logger.Warn("redis IncrRequests failed for %s: %v", clone.ID, err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -1604,6 +1814,18 @@ func (gs *LocalGovernanceStore) ResetExpiredBudgetsInMemory(ctx context.Context)
 
 			gs.logger.Debug(fmt.Sprintf("Reset budget %s (was %.2f, reset to 0)",
 				copiedBudget.ID, oldUsage))
+
+			if gs.redisAvailable.Load() && gs.redisCounters != nil {
+				var ttl int64
+				if copiedBudget.ResetDuration != "" {
+					if dur, err := configstoreTables.ParseDuration(copiedBudget.ResetDuration); err == nil {
+						ttl = int64(dur.Seconds())
+					}
+				}
+				if err := gs.redisCounters.ResetBudget(ctx, copiedBudget.ID, ttl); err != nil {
+					gs.logger.Warn("redis ResetBudget failed for %s: %v", copiedBudget.ID, err)
+				}
+			}
 		}
 		return true // continue
 	})
@@ -1676,6 +1898,23 @@ func (gs *LocalGovernanceStore) ResetExpiredRateLimitsInMemory(ctx context.Conte
 
 			// Update all VKs and provider configs that reference this rate limit
 			gs.updateRateLimitReferences(&copiedRateLimit)
+
+			if gs.redisAvailable.Load() && gs.redisCounters != nil {
+				var ttl int64
+				if copiedRateLimit.TokenResetDuration != nil {
+					if dur, err := configstoreTables.ParseDuration(*copiedRateLimit.TokenResetDuration); err == nil {
+						ttl = int64(dur.Seconds())
+					}
+				}
+				if ttl == 0 && copiedRateLimit.RequestResetDuration != nil {
+					if dur, err := configstoreTables.ParseDuration(*copiedRateLimit.RequestResetDuration); err == nil {
+						ttl = int64(dur.Seconds())
+					}
+				}
+				if err := gs.redisCounters.ResetRateLimit(ctx, copiedRateLimit.ID, ttl); err != nil {
+					gs.logger.Warn("redis ResetRateLimit failed for %s: %v", copiedRateLimit.ID, err)
+				}
+			}
 		}
 		return true // continue
 	})
@@ -1862,11 +2101,20 @@ func (gs *LocalGovernanceStore) DumpRateLimits(ctx context.Context, tokenBaselin
 					TokenCurrentUsage:   rateLimit.TokenCurrentUsage,
 					RequestCurrentUsage: rateLimit.RequestCurrentUsage,
 				}
-				if tokenBaseline, exists := tokenBaselines[rateLimit.ID]; exists {
-					update.TokenCurrentUsage += tokenBaseline
-				}
-				if requestBaseline, exists := requestBaselines[rateLimit.ID]; exists {
-					update.RequestCurrentUsage += requestBaseline
+				if gs.IsRedisAvailable() && gs.redisCounters != nil {
+					if t, err := gs.redisCounters.GetTokens(ctx, rateLimit.ID); err == nil {
+						update.TokenCurrentUsage = t
+					}
+					if r, err := gs.redisCounters.GetRequests(ctx, rateLimit.ID); err == nil {
+						update.RequestCurrentUsage = r
+					}
+				} else {
+					if tokenBaseline, exists := tokenBaselines[rateLimit.ID]; exists {
+						update.TokenCurrentUsage += tokenBaseline
+					}
+					if requestBaseline, exists := requestBaselines[rateLimit.ID]; exists {
+						update.RequestCurrentUsage += requestBaseline
+					}
 				}
 				rateLimitUpdates = append(rateLimitUpdates, update)
 			}
@@ -1908,6 +2156,16 @@ func (gs *LocalGovernanceStore) DumpRateLimits(ctx context.Context, tokenBaselin
 			}
 			return fmt.Errorf("failed to dump rate limits to database: %w", err)
 		}
+		if gs.IsRedisAvailable() && gs.redisCounters != nil {
+			for _, u := range rateLimitUpdates {
+				gs.LastDBUsagesRateLimitsTokensMu.Lock()
+				gs.LastDBUsagesTokensRateLimits[u.ID] = u.TokenCurrentUsage
+				gs.LastDBUsagesRateLimitsTokensMu.Unlock()
+				gs.LastDBUsagesRateLimitsRequestsMu.Lock()
+				gs.LastDBUsagesRequestsRateLimits[u.ID] = u.RequestCurrentUsage
+				gs.LastDBUsagesRateLimitsRequestsMu.Unlock()
+			}
+		}
 	}
 	return nil
 }
@@ -1941,9 +2199,12 @@ func (gs *LocalGovernanceStore) DumpBudgets(ctx context.Context, baselines map[s
 			// Update each budget atomically using direct UPDATE to avoid deadlocks
 			// (SELECT + Save pattern causes deadlocks when multiple instances run concurrently)
 			for _, inMemoryBudget := range budgets {
-				// Calculate the new usage value
 				newUsage := inMemoryBudget.CurrentUsage
-				if baseline, exists := baselines[inMemoryBudget.ID]; exists {
+				if gs.IsRedisAvailable() && gs.redisCounters != nil {
+					if s, err := gs.redisCounters.GetBudget(ctx, inMemoryBudget.ID); err == nil {
+						newUsage = s
+					}
+				} else if baseline, exists := baselines[inMemoryBudget.ID]; exists {
 					newUsage += baseline
 				}
 
@@ -1957,6 +2218,11 @@ func (gs *LocalGovernanceStore) DumpBudgets(ctx context.Context, baselines map[s
 
 				if result.Error != nil {
 					return fmt.Errorf("failed to update budget %s: %w", inMemoryBudget.ID, result.Error)
+				}
+				if gs.IsRedisAvailable() && gs.redisCounters != nil {
+					gs.LastDBUsagesBudgetsMu.Lock()
+					gs.LastDBUsagesBudgets[inMemoryBudget.ID] = newUsage
+					gs.LastDBUsagesBudgetsMu.Unlock()
 				}
 			}
 			return nil

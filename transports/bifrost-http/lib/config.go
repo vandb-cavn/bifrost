@@ -141,6 +141,7 @@ type ConfigData struct {
 	LogsStoreConfig   *logstore.Config                      `json:"logs_store,omitempty"`
 	Plugins           []*schemas.PluginConfig               `json:"plugins,omitempty"`
 	WebSocket         *schemas.WebSocketConfig              `json:"websocket,omitempty"`
+	Cluster           *ClusterConfig                        `json:"cluster,omitempty"`
 }
 
 // UnmarshalJSON unmarshals the ConfigData from JSON using internal unmarshallers
@@ -162,6 +163,7 @@ func (cd *ConfigData) UnmarshalJSON(data []byte) error {
 		LogsStoreConfig   json.RawMessage                       `json:"logs_store,omitempty"`
 		Plugins           []*schemas.PluginConfig               `json:"plugins,omitempty"`
 		WebSocket         *schemas.WebSocketConfig              `json:"websocket,omitempty"`
+		Cluster           *ClusterConfig                        `json:"cluster,omitempty"`
 	}
 
 	var temp TempConfigData
@@ -179,6 +181,7 @@ func (cd *ConfigData) UnmarshalJSON(data []byte) error {
 	cd.Governance = temp.Governance
 	cd.Plugins = temp.Plugins
 	cd.WebSocket = temp.WebSocket
+	cd.Cluster = temp.Cluster
 	// Initialize providers map if nil
 	if cd.Providers == nil {
 		cd.Providers = make(map[string]configstore.ProviderConfig)
@@ -295,6 +298,9 @@ type Config struct {
 	StreamingDecompressThreshold int64
 	// WebSocket configuration for WS gateway features (Responses WS mode, Realtime API).
 	WebSocketConfig *schemas.WebSocketConfig
+
+	// Multi-node OSS (Redis streams + counters). Nil if omitted from config.json.
+	Cluster *ClusterConfig
 
 	// Precompiled header matcher for header filtering. Rebuilt on config change.
 	headerMatcher atomic.Pointer[HeaderMatcher]
@@ -532,6 +538,7 @@ func LoadConfig(ctx context.Context, configDirPath string) (*Config, error) {
 		wsConfig.CheckAndSetDefaults()
 		config.WebSocketConfig = wsConfig
 	}
+	config.Cluster = configData.Cluster
 	return config, nil
 }
 

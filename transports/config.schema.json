@@ -1033,6 +1033,10 @@
     "cluster_config": {
       "$ref": "#/$defs/cluster_config"
     },
+    "cluster": {
+      "$ref": "#/$defs/oss_cluster_config",
+      "description": "Multi-node OSS sync via Redis (config stream + shared counters). Omit for single-node mode."
+    },
     "saml_config": {
       "$ref": "#/$defs/saml_config"
     },
@@ -3569,6 +3573,78 @@
         "enabled"
       ],
       "additionalProperties": false
+    },
+    "oss_cluster_config": {
+      "type": "object",
+      "description": "Multi-node OSS configuration: Redis Streams for config invalidation and Redis counters for rate limits and budgets.",
+      "additionalProperties": false,
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": "Stable consumer identity across restarts for Redis stream cursor persistence. Falls back to BIFROST_NODE_ID env var, then os.Hostname()."
+        },
+        "strict_budgets": {
+          "type": "boolean",
+          "description": "When true, budget checks use DB-atomic fallback when Redis is unavailable. Default: false.",
+          "default": false
+        },
+        "redis": {
+          "type": "object",
+          "description": "Redis connection for streams and counters.",
+          "additionalProperties": false,
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "Redis address (host:port) for standalone mode."
+            },
+            "addrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Seed addresses for Redis Cluster (used when non-empty; overrides addr)."
+            },
+            "cluster_mode": {
+              "type": "boolean",
+              "description": "Use Redis Cluster client.",
+              "default": false
+            },
+            "password": {
+              "type": "string",
+              "description": "Redis AUTH password."
+            },
+            "db": {
+              "type": "integer",
+              "description": "Redis database index. Ignored in cluster_mode.",
+              "default": 0
+            },
+            "pool_size": {
+              "type": "integer",
+              "description": "Connection pool size.",
+              "default": 20
+            },
+            "tls": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "cert_file": {
+                  "type": "string"
+                },
+                "key_file": {
+                  "type": "string"
+                },
+                "ca_file": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "saml_config": {
       "type": "object",

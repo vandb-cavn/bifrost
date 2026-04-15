@@ -37,6 +37,7 @@ target/
 # Go workspaces (local only)
 go.work
 go.work.sum
+.worktrees/
 
 # Generated schema copy (created by go generate)
 transports/schema/config.schema.json

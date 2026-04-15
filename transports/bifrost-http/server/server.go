@@ -16,6 +16,7 @@ import (
 
 	"github.com/fasthttp/router"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
@@ -134,6 +135,13 @@ type BifrostHTTPServer struct {
 	WSTicketStore     *handlers.WSTicketStore
 
 	wsPool *bfws.Pool
+
+	// Multi-node cluster (optional): Redis Streams + PublishingConfigStore; closed on shutdown.
+	clusterSyncer      configstore.ClusterSyncer
+	clusterRedisClient redis.UniversalClient
+	clusterCtx         context.Context
+	clusterCancel      context.CancelFunc
+	clusterEventNodeID string
 }
 
 var logger schemas.Logger
@@ -291,6 +299,76 @@ func (s *BifrostHTTPServer) getGovernancePluginName() string {
 func (s *BifrostHTTPServer) getGovernancePlugin() (governance.BaseGovernancePlugin, error) {
 	// Use type-safe finder from Config
 	return lib.FindPluginAs[governance.BaseGovernancePlugin](s.Config, s.getGovernancePluginName())
+}
+
+// getGovernanceLocalStore returns the governance *LocalGovernanceStore or nil.
+func (s *BifrostHTTPServer) getGovernanceLocalStore() *governance.LocalGovernanceStore {
+	if s.Config == nil || !s.Config.IsPluginLoaded(s.getGovernancePluginName()) {
+		return nil
+	}
+	gp, err := s.getGovernancePlugin()
+	if err != nil {
+		return nil
+	}
+	store := gp.GetGovernanceStore()
+	ls, ok := store.(*governance.LocalGovernanceStore)
+	if !ok {
+		return nil
+	}
+	return ls
+}
+
+// initClusterPublishing wraps ConfigStore with PublishingConfigStore when cluster.redis is configured.
+// Must run before LoadPlugins so governance and all handlers use the publishing store.
+func (s *BifrostHTTPServer) initClusterPublishing(ctx context.Context) error {
+	if s.Config == nil || s.Config.Cluster == nil || s.Config.ConfigStore == nil {
+		return nil
+	}
+	client, err := s.Config.Cluster.Redis.NewRedisUniversalClient()
+	if err != nil {
+		return fmt.Errorf("cluster redis client: %w", err)
+	}
+	if client == nil {
+		return nil
+	}
+	if err := client.Ping(ctx).Err(); err != nil {
+		logger.Warn("cluster redis unavailable at startup, multi-node sync disabled: %v", err)
+		_ = client.Close()
+		return nil
+	}
+	s.clusterRedisClient = client
+	s.clusterSyncer = configstore.NewRedisClusterSyncer(client)
+	s.clusterEventNodeID = uuid.New().String()
+	s.Config.ConfigStore = configstore.NewPublishingConfigStore(
+		s.Config.ConfigStore,
+		s.clusterSyncer,
+		s.clusterEventNodeID,
+		logger,
+	)
+	logger.Info("cluster: publishing enabled (event node id %s)", s.clusterEventNodeID)
+	return nil
+}
+
+// initClusterSubscriberAndRedis runs Redis counter recovery and starts the config stream consumer.
+// Must run after Bifrost client and routes exist (FullReload needs Client).
+func (s *BifrostHTTPServer) initClusterSubscriberAndRedis(ctx context.Context) error {
+	if s.clusterSyncer == nil || s.clusterRedisClient == nil || s.Config == nil || s.Config.Cluster == nil {
+		return nil
+	}
+	clusterCfg := s.Config.Cluster
+	if gov := s.getGovernanceLocalStore(); gov != nil {
+		if ok := gov.InitRedis(ctx, s.clusterRedisClient); ok {
+			gov.SetRedisAvailable(true)
+			logger.Info("cluster: Redis recovery merge complete; using Redis for RL/budget counters")
+		} else {
+			logger.Warn("cluster: Redis recovery merge failed; operating in degraded mode (DB-only counters)")
+		}
+	}
+	consumerID := clusterCfg.ConsumerID()
+	s.clusterCtx, s.clusterCancel = context.WithCancel(ctx)
+	go s.clusterSyncer.Subscribe(s.clusterCtx, consumerID, s.clusterEventNodeID, s.FullReload, s.handleConfigSyncEvent)
+	logger.Info("cluster: subscriber running (consumerID=%s)", consumerID)
+	return nil
 }
 
 // ReloadVirtualKey reloads a virtual key from the in-memory store
@@ -719,6 +797,307 @@ func (s *BifrostHTTPServer) ReloadClientConfigFromConfigStore(ctx context.Contex
 		})
 	}
 	return nil
+}
+
+// FullReload reloads runtime state from the DB in a fixed order. DB is authoritative: entities
+// present in memory but absent from the DB are removed where governance applies.
+func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
+	if s.Config == nil || s.Config.ConfigStore == nil {
+		return fmt.Errorf("config store not initialized")
+	}
+	if s.Client == nil {
+		return fmt.Errorf("bifrost client not initialized")
+	}
+
+	govOK := s.Config.IsPluginLoaded(s.getGovernancePluginName())
+	var govData *governance.GovernanceData
+	if govOK {
+		if gp, err := s.getGovernancePlugin(); err == nil {
+			govData = gp.GetGovernanceStore().GetGovernanceData()
+		}
+	}
+
+	inMemProviders := s.Config.GetAvailableProviders()
+
+	if err := s.ReloadClientConfigFromConfigStore(ctx); err != nil {
+		logger.Warn("FullReload: client config reload failed: %v", err)
+	}
+
+	providers, err := s.Config.ConfigStore.GetProviders(ctx)
+	if err != nil {
+		logger.Warn("FullReload: failed to list providers: %v", err)
+	} else {
+		dbProviderSet := make(map[schemas.ModelProvider]bool)
+		for _, p := range providers {
+			pr := schemas.ModelProvider(p.Name)
+			dbProviderSet[pr] = true
+			if _, err := s.ReloadProvider(ctx, pr); err != nil {
+				logger.Warn("FullReload: provider %s reload failed: %v", p.Name, err)
+			}
+		}
+		if govOK {
+			for _, mp := range inMemProviders {
+				if !dbProviderSet[mp] {
+					if err := s.RemoveProvider(ctx, mp); err != nil {
+						logger.Warn("FullReload: RemoveProvider %s failed: %v", mp, err)
+					}
+				}
+			}
+		}
+	}
+
+	if govOK {
+		modelConfigs, err := s.Config.ConfigStore.GetModelConfigs(ctx)
+		if err != nil {
+			logger.Warn("FullReload: failed to list model configs: %v", err)
+		} else {
+			dbMCSet := make(map[string]bool)
+			for _, mc := range modelConfigs {
+				dbMCSet[mc.ID] = true
+				if _, err := s.ReloadModelConfig(ctx, mc.ID); err != nil {
+					logger.Warn("FullReload: model config %s reload failed: %v", mc.ID, err)
+				}
+			}
+			if govData != nil {
+				for _, mc := range govData.ModelConfigs {
+					if mc != nil && !dbMCSet[mc.ID] {
+						if err := s.RemoveModelConfig(ctx, mc.ID); err != nil {
+							logger.Warn("FullReload: RemoveModelConfig %s failed: %v", mc.ID, err)
+						}
+					}
+				}
+			}
+		}
+
+		virtualKeys, err := s.Config.ConfigStore.GetVirtualKeys(ctx)
+		if err != nil {
+			logger.Warn("FullReload: failed to list virtual keys: %v", err)
+		} else {
+			dbVKSet := make(map[string]bool)
+			for _, vk := range virtualKeys {
+				dbVKSet[vk.ID] = true
+				if _, err := s.ReloadVirtualKey(ctx, vk.ID); err != nil {
+					logger.Warn("FullReload: virtual key %s reload failed: %v", vk.ID, err)
+				}
+			}
+			if govData != nil {
+				for id := range govData.VirtualKeys {
+					if !dbVKSet[id] {
+						if err := s.RemoveVirtualKey(ctx, id); err != nil {
+							logger.Warn("FullReload: RemoveVirtualKey %s failed: %v", id, err)
+						}
+					}
+				}
+			}
+		}
+
+		teams, err := s.Config.ConfigStore.GetTeams(ctx, "")
+		if err != nil {
+			logger.Warn("FullReload: failed to list teams: %v", err)
+		} else {
+			dbTeamSet := make(map[string]bool)
+			for _, t := range teams {
+				dbTeamSet[t.ID] = true
+				if _, err := s.ReloadTeam(ctx, t.ID); err != nil {
+					logger.Warn("FullReload: team %s reload failed: %v", t.ID, err)
+				}
+			}
+			if govData != nil {
+				for id := range govData.Teams {
+					if !dbTeamSet[id] {
+						if err := s.RemoveTeam(ctx, id); err != nil {
+							logger.Warn("FullReload: RemoveTeam %s failed: %v", id, err)
+						}
+					}
+				}
+			}
+		}
+
+		customers, err := s.Config.ConfigStore.GetCustomers(ctx)
+		if err != nil {
+			logger.Warn("FullReload: failed to list customers: %v", err)
+		} else {
+			dbCustSet := make(map[string]bool)
+			for _, c := range customers {
+				dbCustSet[c.ID] = true
+				if _, err := s.ReloadCustomer(ctx, c.ID); err != nil {
+					logger.Warn("FullReload: customer %s reload failed: %v", c.ID, err)
+				}
+			}
+			if govData != nil {
+				for id := range govData.Customers {
+					if !dbCustSet[id] {
+						if err := s.RemoveCustomer(ctx, id); err != nil {
+							logger.Warn("FullReload: RemoveCustomer %s failed: %v", id, err)
+						}
+					}
+				}
+			}
+		}
+
+		routingRules, err := s.Config.ConfigStore.GetRoutingRules(ctx)
+		if err != nil {
+			logger.Warn("FullReload: failed to list routing rules: %v", err)
+		} else {
+			dbRRSet := make(map[string]bool)
+			for _, r := range routingRules {
+				dbRRSet[r.ID] = true
+				if err := s.ReloadRoutingRule(ctx, r.ID); err != nil {
+					logger.Warn("FullReload: routing rule %s reload failed: %v", r.ID, err)
+				}
+			}
+			if govData != nil {
+				for id := range govData.RoutingRules {
+					if !dbRRSet[id] {
+						if err := s.RemoveRoutingRule(ctx, id); err != nil {
+							logger.Warn("FullReload: RemoveRoutingRule %s failed: %v", id, err)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	mcpConfig, err := s.Config.ConfigStore.GetMCPConfig(ctx)
+	if err != nil {
+		logger.Warn("FullReload: failed to get MCP config: %v", err)
+	} else if mcpConfig != nil {
+		dbMCPSet := make(map[string]bool)
+		for _, client := range mcpConfig.ClientConfigs {
+			if client == nil {
+				continue
+			}
+			dbMCPSet[client.ID] = true
+			if err := s.ReconnectMCPClient(ctx, client.ID); err != nil {
+				logger.Warn("FullReload: MCP client %s reconnect failed: %v", client.ID, err)
+			}
+		}
+		if existingClients, err := s.Client.GetMCPClients(); err == nil {
+			for _, ec := range existingClients {
+				if ec.Config == nil {
+					continue
+				}
+				if !dbMCPSet[ec.Config.ID] {
+					if err := s.RemoveMCPClient(ctx, ec.Config.ID); err != nil {
+						logger.Warn("FullReload: RemoveMCPClient %s failed: %v", ec.Config.ID, err)
+					}
+				}
+			}
+		}
+	}
+
+	if err := s.reconcilePlugins(ctx); err != nil {
+		logger.Warn("FullReload: plugin reconciliation failed: %v", err)
+	}
+
+	return nil
+}
+
+func (s *BifrostHTTPServer) reconcilePlugins(ctx context.Context) error {
+	dbPlugins, err := s.Config.ConfigStore.GetPlugins(ctx)
+	if err != nil {
+		return fmt.Errorf("list plugins from DB: %w", err)
+	}
+
+	memPlugins := s.GetPluginStatus(ctx)
+
+	dbEnabled := make(map[string]*tables.TablePlugin)
+	for _, p := range dbPlugins {
+		if p != nil && p.Enabled {
+			dbEnabled[p.Name] = p
+		}
+	}
+
+	for name, p := range dbEnabled {
+		if _, inMem := memPlugins[name]; !inMem {
+			if err := s.ReloadPlugin(ctx, name, p.Path, p.Config, p.Placement, p.Order); err != nil {
+				logger.Warn("reconcilePlugins: failed to load plugin %s: %v", name, err)
+			}
+		}
+	}
+
+	for internalName, st := range memPlugins {
+		if _, inDB := dbEnabled[internalName]; !inDB {
+			if err := s.RemovePlugin(ctx, st.Name); err != nil {
+				logger.Warn("reconcilePlugins: failed to remove plugin %s: %v", internalName, err)
+			}
+		}
+	}
+
+	for name, p := range dbEnabled {
+		if _, inMem := memPlugins[name]; inMem {
+			if err := s.ReloadPlugin(ctx, name, p.Path, p.Config, p.Placement, p.Order); err != nil {
+				logger.Warn("reconcilePlugins: failed to reload plugin %s: %v", name, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEvent) {
+	ctx := context.Background()
+
+	switch event.Type {
+	case "full_reload":
+		if err := s.FullReload(ctx); err != nil {
+			logger.Warn("cluster: FullReload failed: %v", err)
+		}
+	case "provider":
+		if event.Action == "delete" {
+			_ = s.RemoveProvider(ctx, schemas.ModelProvider(event.ID))
+		} else {
+			_, _ = s.ReloadProvider(ctx, schemas.ModelProvider(event.ID))
+		}
+	case "virtual_key":
+		if event.Action == "delete" {
+			_ = s.RemoveVirtualKey(ctx, event.ID)
+		} else {
+			_, _ = s.ReloadVirtualKey(ctx, event.ID)
+		}
+	case "team":
+		if event.Action == "delete" {
+			_ = s.RemoveTeam(ctx, event.ID)
+		} else {
+			_, _ = s.ReloadTeam(ctx, event.ID)
+		}
+	case "customer":
+		if event.Action == "delete" {
+			_ = s.RemoveCustomer(ctx, event.ID)
+		} else {
+			_, _ = s.ReloadCustomer(ctx, event.ID)
+		}
+	case "model_config":
+		if event.Action == "delete" {
+			_ = s.RemoveModelConfig(ctx, event.ID)
+		} else {
+			_, _ = s.ReloadModelConfig(ctx, event.ID)
+		}
+	case "routing_rule":
+		if event.Action == "delete" {
+			_ = s.RemoveRoutingRule(ctx, event.ID)
+		} else {
+			_ = s.ReloadRoutingRule(ctx, event.ID)
+		}
+	case "mcp_client":
+		if event.Action == "delete" {
+			_ = s.RemoveMCPClient(ctx, event.ID)
+		} else {
+			_ = s.ReconnectMCPClient(ctx, event.ID)
+		}
+	case "plugin":
+		if event.Action == "delete" {
+			if st, ok := s.Config.GetPluginStatusByName(event.ID); ok {
+				_ = s.RemovePlugin(ctx, st.Name)
+			}
+		} else {
+			if p, err := s.Config.ConfigStore.GetPlugin(ctx, event.ID); err == nil && p != nil {
+				_ = s.ReloadPlugin(ctx, event.ID, p.Path, p.Config, p.Placement, p.Order)
+			}
+		}
+	case "client_config":
+		_ = s.ReloadClientConfigFromConfigStore(ctx)
+	}
 }
 
 // UpdateAuthConfig updates auth config in the config store and updates the AuthMiddleware's in-memory config
@@ -1242,6 +1621,9 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config %v", err)
 	}
+	if err := s.initClusterPublishing(ctx); err != nil {
+		logger.Warn("cluster publishing init: %v", err)
+	}
 	if s.Config.KVStore != nil {
 		integrations.RegisterKVDecoders(s.Config.KVStore)
 	}
@@ -1454,6 +1836,9 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		MaxRequestBodySize: s.Config.ClientConfig.MaxRequestBodySizeMB * 1024 * 1024,
 		ReadBufferSize:     1024 * 64, // 64kb
 	}
+	if err := s.initClusterSubscriberAndRedis(ctx); err != nil {
+		logger.Warn("cluster subscriber init: %v", err)
+	}
 	return nil
 }
 
@@ -1506,6 +1891,13 @@ func (s *BifrostHTTPServer) Start() error {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
+			if s.clusterCancel != nil {
+				s.clusterCancel()
+			}
+			if s.clusterRedisClient != nil {
+				_ = s.clusterRedisClient.Close()
+				s.clusterRedisClient = nil
+			}
 			logger.Info("shutting down bifrost client...")
 			s.Client.Shutdown()
 			logger.Info("bifrost client shutdown completed")
