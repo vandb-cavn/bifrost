@@ -1,0 +1,61 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "config_store": {
+    "enabled": true,
+    "type": "postgres",
+    "config": {
+      "host": "postgres",
+      "port": "5432",
+      "user": "bifrost",
+      "password": "bifrost_password",
+      "db_name": "bifrost",
+      "ssl_mode": "disable"
+    }
+  },
+  "logs_store": {
+    "enabled": true,
+    "type": "postgres",
+    "config": {
+      "host": "postgres",
+      "port": "5432",
+      "user": "bifrost",
+      "password": "bifrost_password",
+      "db_name": "bifrost",
+      "ssl_mode": "disable"
+    }
+  },
+  "cluster": {
+    "strict_budgets": false,
+    "redis": {
+      "addr": "redis:6379",
+      "db": 0,
+      "cluster_mode": false,
+      "pool_size": 20,
+      "tls": {
+        "enabled": false
+      }
+    }
+  },
+  "client": {
+    "drop_excess_requests": false,
+    "initial_pool_size": 5000,
+    "prometheus_labels": [],
+    "enable_logging": true,
+    "disable_content_logging": false,
+    "log_retention_days": 30,
+    "enforce_auth_on_inference": false,
+    "allow_direct_keys": false,
+    "allowed_origins": ["*"],
+    "max_request_body_size_mb": 100,
+    "compat": {
+      "should_convert_params": false
+    }
+  },
+  "framework": {
+    "pricing": {
+      "pricing_url": "https://getbifrost.ai/datasheet",
+      "pricing_sync_interval": 86400
+    }
+  },
+  "providers": {}
+}
