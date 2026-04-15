@@ -37,26 +37,25 @@ import { useEffect, useState } from "react";
 import { useFieldArray, useForm, type Resolver } from "react-hook-form";
 
 interface OtelFormFragmentProps {
-  currentConfig?: {
-    enabled?: boolean;
-    profiles?: Array<{
-      enabled?: boolean;
-      service_name?: string;
-      collector_url?: string;
-      headers?: Record<string, string>;
-      trace_type?: "genai_extension";
-      protocol?: "http" | "grpc";
-      tls_ca_cert?: string;
-      insecure?: boolean;
-      metrics_enabled?: boolean;
-      metrics_endpoint?: string;
-      metrics_push_interval?: number;
-    }>;
-  };
-  onSave: (config: OtelFormSchema) => Promise<void>;
-  onDelete?: () => void;
-  isDeleting?: boolean;
-  isLoading?: boolean;
+	currentConfig?: {
+		enabled?: boolean;
+		service_name?: string;
+		collector_url?: string;
+		headers?: Record<string, string>;
+		trace_type?: "genai_extension" | "vercel" | "open_inference";
+		protocol?: "http" | "grpc";
+		// TLS configuration
+		tls_ca_cert?: string;
+		insecure?: boolean;
+		// Metrics push configuration
+		metrics_enabled?: boolean;
+		metrics_endpoint?: string;
+		metrics_push_interval?: number;
+	};
+	onSave: (config: OtelFormSchema) => Promise<void>;
+	onDelete?: () => void;
+	isDeleting?: boolean;
+	isLoading?: boolean;
 }
 
 const DEFAULT_PROFILE: OtelProfileConfigSchema = {
@@ -94,8 +93,11 @@ function profileDefaults(p?: RawProfile): OtelProfileConfigSchema {
 }
 
 const traceTypeOptions = [
-  { value: "genai_extension", label: "OTEL - GenAI Extension" },
+  { value: "genai_extension", label: "OTel GenAI Extension (Recommended)" },
+  { value: "vercel", label: "Vercel AI SDK", disabled: true, disabledReason: "Coming soon" },
+  { value: "open_inference", label: "Arize OpenInference", disabled: true, disabledReason: "Coming soon" },
 ];
+
 const protocolOptions = [
   { value: "http", label: "HTTP" },
   { value: "grpc", label: "GRPC" },
@@ -108,11 +110,28 @@ export function OtelFormFragment({
   isDeleting = false,
   isLoading = false,
 }: OtelFormFragmentProps) {
-  const hasOtelAccess = useRbac(
-    RbacResource.Observability,
-    RbacOperation.Update,
-  );
-  const [isSaving, setIsSaving] = useState(false);
+	const hasOtelAccess = useRbac(RbacResource.Observability, RbacOperation.Update);
+	const [isSaving, setIsSaving] = useState(false);
+	const form = useForm<OtelFormSchema, any, OtelFormSchema>({
+		resolver: zodResolver(otelFormSchema) as Resolver<OtelFormSchema, any, OtelFormSchema>,
+		mode: "onChange",
+		reValidateMode: "onChange",
+		defaultValues: {
+			enabled: initialConfig?.enabled ?? true,
+			otel_config: {
+				service_name: initialConfig?.service_name ?? "bifrost",
+				collector_url: initialConfig?.collector_url ?? "",
+				headers: initialConfig?.headers ?? {},
+				trace_type: initialConfig?.trace_type ?? "genai_extension",
+				protocol: initialConfig?.protocol ?? "http",
+				tls_ca_cert: initialConfig?.tls_ca_cert ?? "",
+				insecure: initialConfig?.insecure ?? true,
+				metrics_enabled: initialConfig?.metrics_enabled ?? false,
+				metrics_endpoint: initialConfig?.metrics_endpoint ?? "",
+				metrics_push_interval: initialConfig?.metrics_push_interval ?? 15,
+			},
+		},
+	});
 
   const makeDefaultValues = (cfg: typeof initialConfig) => ({
     enabled: cfg?.enabled ?? true,

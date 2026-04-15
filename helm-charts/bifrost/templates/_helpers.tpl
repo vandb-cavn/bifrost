@@ -814,6 +814,11 @@ false
 {{- if hasKey $client "allowOnAllVirtualKeys" }}
 {{- $_ := set $cc "allow_on_all_virtual_keys" $client.allowOnAllVirtualKeys }}
 {{- end }}
+{{- /* Override connection_string with env var placeholder when secretRef is set */ -}}
+{{- if and $client.secretRef $client.secretRef.name }}
+{{- $envName := printf "BIFROST_MCP_%s_CONNECTION_STRING" (regexReplaceAll "[^A-Z0-9]+" (upper $client.name) "_") }}
+{{- $_ := set $cc "connection_string" (printf "env.%s" $envName) }}
+{{- end }}
 {{- $clientConfigs = append $clientConfigs $cc }}
 {{- end }}
 {{- $mcpConfig := dict "client_configs" $clientConfigs }}
@@ -1090,7 +1095,7 @@ Call this template at the beginning of deployment/stateful templates
 {{- fail "ERROR: bifrost.plugins.otel.config.collector_url is required when OTEL plugin is enabled. Provide the URL of your OpenTelemetry collector." }}
 {{- end }}
 {{- if not .Values.bifrost.plugins.otel.config.trace_type }}
-{{- fail "ERROR: bifrost.plugins.otel.config.trace_type is required when OTEL plugin is enabled. Supported value: otel" }}
+{{- fail "ERROR: bifrost.plugins.otel.config.trace_type is required when OTEL plugin is enabled. Supported values: genai_extension, vercel, open_inference" }}
 {{- end }}
 {{- if not .Values.bifrost.plugins.otel.config.protocol }}
 {{- fail "ERROR: bifrost.plugins.otel.config.protocol is required when OTEL plugin is enabled. Supported values: http, grpc" }}
