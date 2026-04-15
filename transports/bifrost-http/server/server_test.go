@@ -1,8 +1,39 @@
 package server
 
 import (
+	"context"
+	"os"
 	"testing"
+
+	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/configstore"
+	"github.com/maximhq/bifrost/framework/configstore/tables"
+	"github.com/maximhq/bifrost/framework/modelcatalog"
+	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
+
+type noopServerTestLogger struct{}
+
+func (noopServerTestLogger) Debug(string, ...any)                   {}
+func (noopServerTestLogger) Info(string, ...any)                    {}
+func (noopServerTestLogger) Warn(string, ...any)                    {}
+func (noopServerTestLogger) Error(string, ...any)                   {}
+func (noopServerTestLogger) Fatal(string, ...any)                   {}
+func (noopServerTestLogger) SetLevel(schemas.LogLevel)              {}
+func (noopServerTestLogger) SetOutputType(schemas.LoggerOutputType) {}
+func (noopServerTestLogger) LogHTTPRequest(schemas.LogLevel, string) schemas.LogEventBuilder {
+	return schemas.NoopLogEvent
+}
+
+func TestMain(m *testing.M) {
+	SetLogger(noopServerTestLogger{})
+	os.Exit(m.Run())
+}
 
 // TestConfig is a sample config struct for testing
 type TestConfig struct {
@@ -277,4 +308,116 @@ func TestMarshalPluginConfig_WithComplexType(t *testing.T) {
 	if result.Nested.Name != "nested-config" {
 		t.Errorf("Expected nested name=nested-config, got %s", result.Nested.Name)
 	}
+}
+
+// configSyncProxyTestStore embeds a real RDB store and overrides GetProxyConfig for handler tests.
+type configSyncProxyTestStore struct {
+	*configstore.RDBConfigStore
+	proxy *tables.GlobalProxyConfig
+}
+
+func (s *configSyncProxyTestStore) GetProxyConfig(_ context.Context) (*tables.GlobalProxyConfig, error) {
+	return s.proxy, nil
+}
+
+func testRDBConfigBase(t *testing.T) *configstore.RDBConfigStore {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
+	require.NoError(t, err)
+	return configstore.NewRDBConfigStoreForTest(db)
+}
+
+func validTestPricingOverride(id, name string) *tables.TablePricingOverride {
+	return &tables.TablePricingOverride{
+		ID:               id,
+		Name:             name,
+		ScopeKind:        string(modelcatalog.ScopeKindGlobal),
+		MatchType:        string(modelcatalog.MatchTypeExact),
+		Pattern:          "gpt-4o",
+		RequestTypes:     []schemas.RequestType{schemas.ChatCompletionRequest},
+		PricingPatchJSON: `{}`,
+	}
+}
+
+// configSyncPricingTestStore embeds a real RDB store and overrides GetPricingOverrideByID.
+type configSyncPricingTestStore struct {
+	*configstore.RDBConfigStore
+	override *tables.TablePricingOverride
+}
+
+func (s *configSyncPricingTestStore) GetPricingOverrideByID(_ context.Context, id string) (*tables.TablePricingOverride, error) {
+	if s.override != nil && s.override.ID == id {
+		return s.override, nil
+	}
+	return nil, configstore.ErrNotFound
+}
+
+func TestHandleConfigSync_ProxyConfig(t *testing.T) {
+	proxyConfig := &tables.GlobalProxyConfig{Enabled: true, Type: "http", URL: "http://proxy.local:8080"}
+	st := &configSyncProxyTestStore{
+		RDBConfigStore: testRDBConfigBase(t),
+		proxy:          proxyConfig,
+	}
+
+	s := &BifrostHTTPServer{
+		Config: &lib.Config{ConfigStore: st},
+	}
+
+	s.handleConfigSyncEvent(configstore.ConfigSyncEvent{
+		Type:   "proxy_config",
+		Action: "upsert",
+	})
+
+	require.NotNil(t, s.Config.ProxyConfig)
+	assert.True(t, s.Config.ProxyConfig.Enabled)
+	assert.Equal(t, "http://proxy.local:8080", s.Config.ProxyConfig.URL)
+}
+
+func TestHandleConfigSync_PricingOverrideUpsert(t *testing.T) {
+	override := validTestPricingOverride("po-test", "Test Override")
+	st := &configSyncPricingTestStore{
+		RDBConfigStore: testRDBConfigBase(t),
+		override:       override,
+	}
+	catalog := modelcatalog.NewMinimalCatalogForHandlerTests()
+
+	s := &BifrostHTTPServer{
+		Config: &lib.Config{
+			ConfigStore:  st,
+			ModelCatalog: catalog,
+		},
+	}
+
+	s.handleConfigSyncEvent(configstore.ConfigSyncEvent{
+		Type:   "pricing_override",
+		Action: "upsert",
+		ID:     "po-test",
+	})
+
+	require.Equal(t, 1, catalog.PricingOverrideCount())
+}
+
+func TestHandleConfigSync_PricingOverrideDelete(t *testing.T) {
+	override := validTestPricingOverride("po-del", "To Delete")
+	st := &configSyncPricingTestStore{
+		RDBConfigStore: testRDBConfigBase(t),
+		override:       override,
+	}
+	catalog := modelcatalog.NewMinimalCatalogForHandlerTests()
+	require.NoError(t, catalog.UpsertPricingOverrides(override))
+
+	s := &BifrostHTTPServer{
+		Config: &lib.Config{
+			ConfigStore:  st,
+			ModelCatalog: catalog,
+		},
+	}
+
+	s.handleConfigSyncEvent(configstore.ConfigSyncEvent{
+		Type:   "pricing_override",
+		Action: "delete",
+		ID:     "po-del",
+	})
+
+	assert.Equal(t, 0, catalog.PricingOverrideCount())
 }

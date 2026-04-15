@@ -4,7 +4,7 @@
 
 **Goal:** Replace the overloaded `"client_config"` sync event with four granular event types (`auth_config`, `proxy_config`, `framework_config`, `pricing_override`) so peer nodes apply targeted in-memory reloads on each config change.
 
-**Architecture:** Three edit sites: (1) `PublishingConfigStore` emits the correct event type per write method; (2) `handleConfigSyncEvent` switches on the new types and calls the appropriate in-memory reload; (3) `FullReload` adds the same four reload steps so stream-gap recovery is complete.
+**Architecture:** Three edit sites: (1) `PublishingConfigStore` emits the correct event type per write method; (2) `handleConfigSyncEvent` switches on the new types and calls the appropriate in-memory reload; (3) `FullReload` adds the same four reload steps so stream-gap recovery is complete. A private helper `frameworkPricingConfig` centralises the `TableFrameworkConfig → modelcatalog.Config` field mapping so both reload sites stay in sync automatically when new pricing fields are added.
 
 **Tech Stack:** Go, `go-redis/v9`, miniredis (tests), SQLite in-memory (tests)
 

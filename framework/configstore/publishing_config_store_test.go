@@ -8,6 +8,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,115 @@ func TestPublishingConfigStore_NoPublishOnRollbackAfterWrite(t *testing.T) {
 
 	ev := readLastStreamEvent(t, client)
 	assert.Nil(t, ev, "stream must have no event when transaction rolls back after scheduling")
+}
+
+func TestPublish_UpdateAuthConfig(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	err := pcs.UpdateAuthConfig(ctx, &AuthConfig{IsEnabled: false})
+	require.NoError(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	require.NotNil(t, ev)
+	assert.Equal(t, "auth_config", ev.Type)
+	assert.Equal(t, "upsert", ev.Action)
+}
+
+func TestPublish_UpdateProxyConfig(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	err := pcs.UpdateProxyConfig(ctx, &tables.GlobalProxyConfig{Enabled: false})
+	require.NoError(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	require.NotNil(t, ev)
+	assert.Equal(t, "proxy_config", ev.Type)
+	assert.Equal(t, "upsert", ev.Action)
+}
+
+func TestPublish_UpdateFrameworkConfig(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	url := "https://example.com/pricing.json"
+	err := pcs.UpdateFrameworkConfig(ctx, &tables.TableFrameworkConfig{PricingURL: &url})
+	require.NoError(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	require.NotNil(t, ev)
+	assert.Equal(t, "framework_config", ev.Type)
+	assert.Equal(t, "upsert", ev.Action)
+}
+
+func TestPublish_CreatePricingOverride(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	override := &tables.TablePricingOverride{ID: "po-001", Name: "test"}
+	err := pcs.CreatePricingOverride(ctx, override)
+	require.NoError(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	require.NotNil(t, ev)
+	assert.Equal(t, "pricing_override", ev.Type)
+	assert.Equal(t, "upsert", ev.Action)
+	assert.Equal(t, "po-001", ev.ID)
+}
+
+func TestPublish_UpdatePricingOverride(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	// Create first so update has something to find
+	override := &tables.TablePricingOverride{ID: "po-002", Name: "test"}
+	require.NoError(t, inner.CreatePricingOverride(ctx, override))
+
+	err := pcs.UpdatePricingOverride(ctx, override)
+	require.NoError(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	require.NotNil(t, ev)
+	assert.Equal(t, "pricing_override", ev.Type)
+	assert.Equal(t, "upsert", ev.Action)
+	assert.Equal(t, "po-002", ev.ID)
+}
+
+func TestPublish_DeletePricingOverride(t *testing.T) {
+	client, _ := newMiniRedis(t)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
+	inner := setupRDBTestStore(t)
+	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
+
+	ctx := context.Background()
+	// Create first so delete has something to find
+	override := &tables.TablePricingOverride{ID: "po-003", Name: "test"}
+	require.NoError(t, inner.CreatePricingOverride(ctx, override))
+
+	err := pcs.DeletePricingOverride(ctx, "po-003")
+	require.NoError(t, err)
+
+	ev := readLastStreamEvent(t, client)
+	require.NotNil(t, ev)
+	assert.Equal(t, "pricing_override", ev.Type)
+	assert.Equal(t, "delete", ev.Action)
+	assert.Equal(t, "po-003", ev.ID)
 }
 
 func TestPublishingConfigStore_NilSyncer_Passthrough(t *testing.T) {

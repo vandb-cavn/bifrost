@@ -20,8 +20,10 @@ import (
 	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
+	"github.com/maximhq/bifrost/framework/modelcatalog"
 	"github.com/maximhq/bifrost/framework/logstore"
 	dynamicPlugins "github.com/maximhq/bifrost/framework/plugins"
 	"github.com/maximhq/bifrost/framework/tracing"
@@ -830,6 +832,44 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 		logger.Warn("FullReload: client config reload failed: %v", err)
 	}
 
+	// Auth config — update AuthMiddleware in-memory only (no DB write).
+	if authConfig, err := s.Config.ConfigStore.GetAuthConfig(ctx); err == nil && authConfig != nil {
+		if s.AuthMiddleware != nil {
+			s.AuthMiddleware.UpdateAuthConfig(authConfig)
+		}
+	} else if err != nil {
+		logger.Warn("FullReload: auth config reload failed: %v", err)
+	}
+
+	// Proxy config — update s.Config.ProxyConfig in-memory.
+	if proxyConfig, err := s.Config.ConfigStore.GetProxyConfig(ctx); err == nil {
+		_ = s.ReloadProxyConfig(ctx, proxyConfig)
+	} else {
+		logger.Warn("FullReload: proxy config reload failed: %v", err)
+	}
+
+	// Framework config — update FrameworkConfig.Pricing fields then call UpdateSyncConfig.
+	if dbFwConfig, err := s.Config.ConfigStore.GetFrameworkConfig(ctx); err == nil && dbFwConfig != nil {
+		if s.Config.FrameworkConfig == nil {
+			s.Config.FrameworkConfig = &framework.FrameworkConfig{}
+		}
+		if s.Config.FrameworkConfig.Pricing == nil {
+			s.Config.FrameworkConfig.Pricing = &modelcatalog.Config{}
+		}
+		s.Config.FrameworkConfig.Pricing.PricingURL = dbFwConfig.PricingURL
+		s.Config.FrameworkConfig.Pricing.PricingSyncInterval = dbFwConfig.PricingSyncInterval
+		if err := s.UpdateSyncConfig(ctx); err != nil {
+			logger.Warn("FullReload: framework config sync failed: %v", err)
+		}
+	} else if err != nil {
+		logger.Warn("FullReload: framework config reload failed: %v", err)
+	}
+
+	// Pricing overrides — full reload from DB into ModelCatalog (no remote pricing URL fetch).
+	if err := s.ReloadPricingFromDBAndPopulateModelPool(ctx); err != nil {
+		logger.Warn("FullReload: pricing overrides reload failed: %v", err)
+	}
+
 	providers, err := s.Config.ConfigStore.GetProviders(ctx)
 	if err != nil {
 		logger.Warn("FullReload: failed to list providers: %v", err)
@@ -1179,6 +1219,52 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		}
 	case "client_config":
 		_ = s.ReloadClientConfigFromConfigStore(ctx)
+	case "auth_config":
+		// Read from DB; update AuthMiddleware in-memory only. Do NOT call s.UpdateAuthConfig —
+		// that method also writes to DB, which would cause a double-write on peer nodes.
+		if config, err := s.Config.ConfigStore.GetAuthConfig(ctx); err == nil && config != nil {
+			if s.AuthMiddleware != nil {
+				s.AuthMiddleware.UpdateAuthConfig(config)
+			}
+		} else if err != nil {
+			logger.Warn("cluster: auth config reload failed: %v", err)
+		}
+	case "proxy_config":
+		// ReloadProxyConfig is in-memory only (sets s.Config.ProxyConfig).
+		if config, err := s.Config.ConfigStore.GetProxyConfig(ctx); err == nil {
+			_ = s.ReloadProxyConfig(ctx, config)
+		} else {
+			logger.Warn("cluster: proxy config reload failed: %v", err)
+		}
+	case "framework_config":
+		// Read TableFrameworkConfig from DB, map pricing fields into modelcatalog.Config,
+		// update s.Config.FrameworkConfig.Pricing, then call UpdateSyncConfig.
+		if dbConfig, err := s.Config.ConfigStore.GetFrameworkConfig(ctx); err == nil && dbConfig != nil {
+			if s.Config.FrameworkConfig == nil {
+				s.Config.FrameworkConfig = &framework.FrameworkConfig{}
+			}
+			if s.Config.FrameworkConfig.Pricing == nil {
+				s.Config.FrameworkConfig.Pricing = &modelcatalog.Config{}
+			}
+			s.Config.FrameworkConfig.Pricing.PricingURL = dbConfig.PricingURL
+			s.Config.FrameworkConfig.Pricing.PricingSyncInterval = dbConfig.PricingSyncInterval
+			if err := s.UpdateSyncConfig(ctx); err != nil {
+				logger.Warn("cluster: framework config sync failed: %v", err)
+			}
+		} else if err != nil {
+			logger.Warn("cluster: framework config reload failed: %v", err)
+		}
+	case "pricing_override":
+		// UpsertPricingOverride / DeletePricingOverride are in-memory only — safe on peer nodes.
+		if event.Action == "delete" {
+			_ = s.DeletePricingOverride(ctx, event.ID)
+		} else {
+			if override, err := s.Config.ConfigStore.GetPricingOverrideByID(ctx, event.ID); err == nil && override != nil {
+				_ = s.UpsertPricingOverride(ctx, override)
+			} else if err != nil {
+				logger.Warn("cluster: pricing override %s reload failed: %v", event.ID, err)
+			}
+		}
 	}
 }
 

@@ -498,6 +498,13 @@ func (mc *ModelCatalog) DeletePricingOverride(id string) {
 	mc.customPricing = buildCustomPricingData(updated)
 }
 
+// PricingOverrideCount returns the number of in-memory pricing overrides.
+func (mc *ModelCatalog) PricingOverrideCount() int {
+	mc.overridesMu.RLock()
+	defer mc.overridesMu.RUnlock()
+	return len(mc.rawOverrides)
+}
+
 // IsTextCompletionSupported checks if a model supports text completion for the given provider.
 // Returns true if the model has pricing data for text completion ("text_completion"),
 // false otherwise. This is used by the litellmcompat plugin to determine whether to
