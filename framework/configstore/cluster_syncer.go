@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -48,11 +49,13 @@ type ClusterSyncer interface {
 // RedisClusterSyncer implements ClusterSyncer via Redis Streams.
 type RedisClusterSyncer struct {
 	client redis.UniversalClient
+	logger schemas.Logger // optional; when set, emits Debug lines for publish/subscribe tracing
 }
 
 // NewRedisClusterSyncer creates a syncer. client must already be connected; caller owns lifecycle.
-func NewRedisClusterSyncer(client redis.UniversalClient) *RedisClusterSyncer {
-	return &RedisClusterSyncer{client: client}
+// logger may be nil; when non-nil, cluster sync publishes and stream deliveries are logged at Debug.
+func NewRedisClusterSyncer(client redis.UniversalClient, logger schemas.Logger) *RedisClusterSyncer {
+	return &RedisClusterSyncer{client: client, logger: logger}
 }
 
 // Publish sends a ConfigSyncEvent to the Redis Stream using XADD MAXLEN ~ N.
@@ -61,12 +64,27 @@ func (s *RedisClusterSyncer) Publish(ctx context.Context, event ConfigSyncEvent)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	return s.client.XAdd(ctx, &redis.XAddArgs{
+	err = s.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		MaxLen: streamMaxLen,
 		Approx: true,
 		Values: map[string]interface{}{"data": string(payload)},
 	}).Err()
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("cluster sync: redis XADD failed stream=%s type=%s action=%s id=%s: %v",
+				streamKey, event.Type, event.Action, event.ID, err)
+		} else {
+			log.Printf("cluster sync: redis XADD failed stream=%s type=%s action=%s id=%s: %v",
+				streamKey, event.Type, event.Action, event.ID, err)
+		}
+		return err
+	}
+	if s.logger != nil {
+		s.logger.Debug("cluster sync: published to redis stream=%s type=%s action=%s id=%s node_id=%s",
+			streamKey, event.Type, event.Action, event.ID, event.NodeID)
+	}
+	return nil
 }
 
 // Subscribe starts the blocking XREAD consumer loop.
@@ -192,9 +210,22 @@ func (s *RedisClusterSyncer) readLoop(
 				}
 				var event ConfigSyncEvent
 				if err := json.Unmarshal([]byte(data), &event); err != nil {
+					if s.logger != nil {
+						s.logger.Debug("cluster sync: skip stream id=%s (unmarshal event: %v)", msg.ID, err)
+					}
 					id = msg.ID
 					_ = s.client.Set(ctx, cursorKey, id, 0).Err()
 					continue
+				}
+				skipSelf := event.NodeID != "" && event.NodeID == selfNodeID
+				if s.logger != nil {
+					if skipSelf {
+						s.logger.Debug("cluster sync: received stream id=%s type=%s action=%s id=%s source_node=%s (skip, same node)",
+							msg.ID, event.Type, event.Action, event.ID, event.NodeID)
+					} else {
+						s.logger.Debug("cluster sync: received stream id=%s type=%s action=%s id=%s source_node=%s (dispatch handler)",
+							msg.ID, event.Type, event.Action, event.ID, event.NodeID)
+					}
 				}
 				if event.NodeID == "" || event.NodeID != selfNodeID {
 					handler(event)

@@ -341,7 +341,7 @@ func (s *BifrostHTTPServer) initClusterPublishing(ctx context.Context) error {
 		return nil
 	}
 	s.clusterRedisClient = client
-	s.clusterSyncer = configstore.NewRedisClusterSyncer(client)
+	s.clusterSyncer = configstore.NewRedisClusterSyncer(client, logger)
 	s.clusterEventNodeID = uuid.New().String()
 	s.Config.ConfigStore = configstore.NewPublishingConfigStore(
 		s.Config.ConfigStore,
@@ -1118,6 +1118,7 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 	if s.clusterCtx != nil {
 		ctx = s.clusterCtx
 	}
+	logger.Debug("cluster sync: handler apply type=%s action=%s id=%s", event.Type, event.Action, event.ID)
 
 	switch event.Type {
 	case "full_reload":

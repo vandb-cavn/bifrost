@@ -53,7 +53,7 @@ func readLastStreamEvent(t *testing.T, client redis.UniversalClient) *ConfigSync
 
 func TestPublishingConfigStore_PublishAfterCommit(t *testing.T) {
 	client, _ := newMiniRedis(t)
-	syncer := NewRedisClusterSyncer(client)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
 	inner := setupRDBTestStore(t)
 	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
 
@@ -77,7 +77,7 @@ func TestPublishingConfigStore_PublishAfterCommit(t *testing.T) {
 
 func TestPublishingConfigStore_NoPublishOnRollback(t *testing.T) {
 	client, _ := newMiniRedis(t)
-	syncer := NewRedisClusterSyncer(client)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
 	inner := setupRDBTestStore(t)
 	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
 
@@ -93,7 +93,7 @@ func TestPublishingConfigStore_NoPublishOnRollback(t *testing.T) {
 
 func TestPublishingConfigStore_NoPublishOnRollbackAfterWrite(t *testing.T) {
 	client, _ := newMiniRedis(t)
-	syncer := NewRedisClusterSyncer(client)
+	syncer := NewRedisClusterSyncer(client, testLogger{})
 	inner := setupRDBTestStore(t)
 	pcs := NewPublishingConfigStore(inner, syncer, "node-A", testLogger{})
 

@@ -78,9 +78,8 @@ func (pcs *PublishingConfigStore) ExecuteTransaction(ctx context.Context, fn fun
 		return err
 	}
 	for _, ev := range acc.events {
-		if pubErr := pcs.syncer.Publish(ctx, ev); pubErr != nil {
-			pcs.logger.Warn("cluster sync publish failed (postgres write succeeded): %v", pubErr)
-		}
+		// Publish logs failures (Warn or std log) for RedisClusterSyncer.
+		_ = pcs.syncer.Publish(ctx, ev)
 	}
 	return nil
 }
