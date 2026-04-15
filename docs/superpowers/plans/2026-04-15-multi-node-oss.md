@@ -253,8 +253,16 @@ type ClusterSyncer interface {
 	Publish(ctx context.Context, event ConfigSyncEvent) error
 	// Subscribe starts the blocking XREAD consumer loop. Calls handler for each
 	// event not published by this node (NodeID != selfNodeID).
+	// fullReloadFn is called synchronously on first start or stream gap;
+	// cursor is only persisted after fullReloadFn returns nil.
 	// Blocks until ctx is cancelled.
-	Subscribe(ctx context.Context, consumerID string, selfNodeID string, handler func(ConfigSyncEvent))
+	Subscribe(
+		ctx context.Context,
+		consumerID string,
+		selfNodeID string,
+		fullReloadFn func(ctx context.Context) error,
+		handler func(ConfigSyncEvent),
+	)
 	// Close releases all resources.
 	Close() error
 }
@@ -284,12 +292,14 @@ func (s *RedisClusterSyncer) Publish(ctx context.Context, event ConfigSyncEvent)
 }
 
 // Subscribe starts the blocking XREAD consumer loop.
-// On first start (no cursor) or stream gap → watermark-first full reload via fullReload callback,
+// On first start (no cursor) or stream gap → watermark-first full reload via fullReloadFn,
 // then resumes blocking XREAD from the watermark.
+// Cursor is only persisted after fullReloadFn returns nil — a failed reload retries with backoff.
 func (s *RedisClusterSyncer) Subscribe(
 	ctx context.Context,
 	consumerID string,
 	selfNodeID string,
+	fullReloadFn func(ctx context.Context) error,
 	handler func(ConfigSyncEvent),
 ) {
 	cursorKey := fmt.Sprintf(cursorKeyFmt, consumerID)
@@ -303,14 +313,24 @@ func (s *RedisClusterSyncer) Subscribe(
 		}
 
 		lastID, err := s.loadCursor(ctx, cursorKey)
-		if err != nil || lastID == "" {
-			// No cursor → watermark-first full reload
-			lastID = s.watermarkFirstFullReload(ctx, cursorKey, handler)
-		} else {
-			// Cursor exists — check for stream gap
-			if gap := s.hasStreamGap(ctx, lastID); gap {
-				lastID = s.watermarkFirstFullReload(ctx, cursorKey, handler)
+		needsFullReload := (err != nil || lastID == "")
+		if !needsFullReload {
+			needsFullReload = s.hasStreamGap(ctx, lastID)
+		}
+
+		if needsFullReload {
+			lastID, err = s.watermarkFirstFullReload(ctx, cursorKey, fullReloadFn)
+			if err != nil {
+				// Full reload failed — backoff and retry; do NOT advance cursor
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+					delay = min(delay*2, reconnectMax)
+				}
+				continue
 			}
+			delay = reconnectBase // reset on success
 		}
 
 		// Blocking XREAD catch-up + live loop
@@ -329,28 +349,30 @@ func (s *RedisClusterSyncer) Subscribe(
 	}
 }
 
-// watermarkFirstFullReload captures stream tip W, then signals a full reload via
-// a special "full_reload" event to the handler, then returns W as the new cursor.
-// The handler is responsible for calling server.FullReload when it sees this event type.
+// watermarkFirstFullReload captures stream tip W, calls fullReloadFn synchronously,
+// and only persists W as the cursor if fullReloadFn succeeds.
+// Returns the watermark ID and any error from fullReloadFn.
 func (s *RedisClusterSyncer) watermarkFirstFullReload(
 	ctx context.Context,
 	cursorKey string,
-	handler func(ConfigSyncEvent),
-) string {
-	// 1. Capture watermark (stream tip)
+	fullReloadFn func(ctx context.Context) error,
+) (string, error) {
+	// 1. Capture watermark (stream tip) BEFORE full reload
 	msgs, err := s.client.XRevRangeN(ctx, streamKey, "+", "-", 1).Result()
 	watermark := "0"
 	if err == nil && len(msgs) > 0 {
 		watermark = msgs[0].ID
 	}
 
-	// 2. Signal handler to do full reload
-	handler(ConfigSyncEvent{Type: "full_reload", Action: "upsert"})
+	// 2. Run full reload synchronously — must succeed before cursor is advanced
+	if err := fullReloadFn(ctx); err != nil {
+		return watermark, fmt.Errorf("full reload failed, cursor not advanced: %w", err)
+	}
 
-	// 3. Persist watermark as cursor
+	// 3. Persist watermark as cursor — only reached on success
 	_ = s.client.Set(ctx, cursorKey, watermark, 0).Err()
 
-	return watermark
+	return watermark, nil
 }
 
 // hasStreamGap returns true if lastID is older than the oldest entry in the stream.
@@ -862,6 +884,208 @@ func (pcs *PublishingConfigStore) UpdateClientConfig(ctx context.Context, config
 		return err
 	}
 	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// Auth / Proxy / Framework config write methods — all affect runtime config on other nodes
+func (pcs *PublishingConfigStore) UpdateAuthConfig(ctx context.Context, config *AuthConfig) error {
+	if err := pcs.ConfigStore.UpdateAuthConfig(ctx, config); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateProxyConfig(ctx context.Context, config *tables.GlobalProxyConfig) error {
+	if err := pcs.ConfigStore.UpdateProxyConfig(ctx, config); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateFrameworkConfig(ctx context.Context, config *tables.TableFrameworkConfig) error {
+	if err := pcs.ConfigStore.UpdateFrameworkConfig(ctx, config); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// Provider key write methods — emit parent provider event so other nodes reload the full provider
+func (pcs *PublishingConfigStore) CreateProviderKey(ctx context.Context, provider schemas.ModelProvider, key schemas.Key, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.CreateProviderKey(ctx, provider, key, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateProviderKey(ctx context.Context, provider schemas.ModelProvider, keyID string, key schemas.Key, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateProviderKey(ctx, provider, keyID, key, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteProviderKey(ctx context.Context, provider schemas.ModelProvider, keyID string, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.DeleteProviderKey(ctx, provider, keyID, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// VK child config write methods — emit parent virtual_key event
+func (pcs *PublishingConfigStore) CreateVirtualKeyProviderConfig(ctx context.Context, vkpc *tables.TableVirtualKeyProviderConfig, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.CreateVirtualKeyProviderConfig(ctx, vkpc, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkpc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateVirtualKeyProviderConfig(ctx context.Context, vkpc *tables.TableVirtualKeyProviderConfig, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateVirtualKeyProviderConfig(ctx, vkpc, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkpc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteVirtualKeyProviderConfig(ctx context.Context, id uint, tx ...*gorm.DB) error {
+	// id is the provider config row ID, not the VK ID; we cannot emit a VK-specific event
+	// without a DB lookup. Emit full_reload — this mutation is rare.
+	if err := pcs.ConfigStore.DeleteVirtualKeyProviderConfig(ctx, id, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) CreateVirtualKeyMCPConfig(ctx context.Context, vkmc *tables.TableVirtualKeyMCPConfig, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.CreateVirtualKeyMCPConfig(ctx, vkmc, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkmc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateVirtualKeyMCPConfig(ctx context.Context, vkmc *tables.TableVirtualKeyMCPConfig, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateVirtualKeyMCPConfig(ctx, vkmc, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkmc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteVirtualKeyMCPConfig(ctx context.Context, id uint, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.DeleteVirtualKeyMCPConfig(ctx, id, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// MCP discovered tools — reload the MCP client on other nodes
+func (pcs *PublishingConfigStore) UpdateMCPClientDiscoveredTools(ctx context.Context, clientID string, tools map[string]schemas.ChatTool, toolNameMapping map[string]string) error {
+	if err := pcs.ConfigStore.UpdateMCPClientDiscoveredTools(ctx, clientID, tools, toolNameMapping); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "mcp_client", Action: "upsert", ID: clientID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// Pricing overrides — affect cost calc; reload client config on other nodes
+func (pcs *PublishingConfigStore) CreatePricingOverride(ctx context.Context, override *tables.TablePricingOverride, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.CreatePricingOverride(ctx, override, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdatePricingOverride(ctx context.Context, override *tables.TablePricingOverride, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdatePricingOverride(ctx, override, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeletePricingOverride(ctx context.Context, id string, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.DeletePricingOverride(ctx, id, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// Rate limit CRUD — entity ID not sufficient to identify parent; emit full_reload.
+// These mutations are rare (governance API usually updates parent VK/provider/team).
+func (pcs *PublishingConfigStore) CreateRateLimit(ctx context.Context, rl *tables.TableRateLimit, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.CreateRateLimit(ctx, rl, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateRateLimit(ctx context.Context, rl *tables.TableRateLimit, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateRateLimit(ctx, rl, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateRateLimits(ctx context.Context, rls []*tables.TableRateLimit, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateRateLimits(ctx, rls, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteRateLimit(ctx context.Context, id string, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.DeleteRateLimit(ctx, id, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+// Budget CRUD — same rationale as rate limits; emit full_reload.
+func (pcs *PublishingConfigStore) CreateBudget(ctx context.Context, b *tables.TableBudget, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.CreateBudget(ctx, b, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateBudget(ctx context.Context, b *tables.TableBudget, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateBudget(ctx, b, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateBudgets(ctx context.Context, bs []*tables.TableBudget, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.UpdateBudgets(ctx, bs, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteBudget(ctx context.Context, id string, tx ...*gorm.DB) error {
+	if err := pcs.ConfigStore.DeleteBudget(ctx, id, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 ```
@@ -1415,18 +1639,52 @@ grep -rn "NewLocalGovernanceStore" /Users/vanduong/Documents/vibecoding/bifost2 
 
 For each caller, pass `nil` as the last argument (single-node mode). Update in `lib/config.go` or wherever the call appears.
 
-- [ ] **Step 6: Build check**
+- [ ] **Step 6: Add exported `InitRedis` and `SetRedisAvailable` methods**
+
+These are the only methods the server package needs to call on `LocalGovernanceStore` for Redis setup. Adding them as exported methods avoids the server package directly accessing unexported fields.
+
+Add to `store.go` after `initLastDBUsagesFromPostgres`:
+
+```go
+// InitRedis wires up the Redis counter client and runs the recovery merge.
+// Returns true if the merge succeeded; caller should call SetRedisAvailable(true) on success.
+// Safe to call from outside the governance package — does not expose unexported fields.
+func (gs *LocalGovernanceStore) InitRedis(ctx context.Context, client redis.UniversalClient) bool {
+	gs.redisCounters = NewRedisCounterClient(client)
+	return gs.RunRecoveryMerge(ctx)
+}
+
+// SetRedisAvailable flips the atomic.Bool that gates all Redis read/write paths.
+// Must only be set to true after InitRedis succeeds.
+func (gs *LocalGovernanceStore) SetRedisAvailable(v bool) {
+	gs.redisAvailable.Store(v)
+}
+```
+
+Add `"github.com/redis/go-redis/v9"` to imports if not already present (it should be after Step 1).
+
+- [ ] **Step 7: Fix all callers of `NewLocalGovernanceStore`**
+
+Search for callers:
+
+```bash
+grep -rn "NewLocalGovernanceStore" /Users/vanduong/Documents/vibecoding/bifost2 --include="*.go"
+```
+
+For each caller, pass `nil` as the last argument (single-node mode). Update in `lib/config.go` or wherever the call appears.
+
+- [ ] **Step 8: Build check**
 
 ```bash
 cd plugins/governance && go build ./... && cd ../..
 ```
 Expected: no errors.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add plugins/governance/store.go
-git commit -m "feat(governance): add Redis fields to LocalGovernanceStore, init LastDBUsages from Postgres"
+git commit -m "feat(governance): add Redis fields to LocalGovernanceStore, init LastDBUsages from Postgres, exported InitRedis/SetRedisAvailable"
 ```
 
 ---
@@ -1903,49 +2161,90 @@ Add this method to `BifrostHTTPServer`:
 ```go
 // FullReload reloads all runtime state from Postgres in a fixed, deterministic order.
 // Idempotent: calling multiple times produces the same in-memory state as calling once.
+// DB is authoritative: entities present in memory but absent from DB are removed.
 // Order: ClientConfig → Providers → ModelConfigs → VirtualKeys/Teams/Customers/RoutingRules → MCP → Plugins.
 func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 	if s.Config == nil || s.Config.ConfigStore == nil {
 		return fmt.Errorf("config store not initialized")
 	}
 
+	// Snapshot current in-memory state for removal reconciliation.
+	// GetGovernanceData returns all in-memory entities; use it to build ID sets.
+	var govData *governance.GovernanceData
+	if gp, err := s.getGovernancePlugin(); err == nil {
+		govData = gp.GetGovernanceData()
+	}
+	inMemProviders := s.Config.GetAvailableProviders() // []schemas.ModelProvider
+
 	// 1. Client config
 	if err := s.ReloadClientConfigFromConfigStore(ctx); err != nil {
 		logger.Warn("FullReload: client config reload failed: %v", err)
 	}
 
-	// 2. Providers
+	// 2. Providers — upsert all DB providers, then remove stale in-memory ones
 	providers, err := s.Config.ConfigStore.GetProviders(ctx)
 	if err != nil {
 		logger.Warn("FullReload: failed to list providers: %v", err)
 	} else {
+		dbProviderSet := make(map[schemas.ModelProvider]bool)
 		for _, p := range providers {
-			if _, err := s.ReloadProvider(ctx, schemas.ModelProvider(p.Name)); err != nil {
+			pr := schemas.ModelProvider(p.Name)
+			dbProviderSet[pr] = true
+			if _, err := s.ReloadProvider(ctx, pr); err != nil {
 				logger.Warn("FullReload: provider %s reload failed: %v", p.Name, err)
+			}
+		}
+		for _, mp := range inMemProviders {
+			if !dbProviderSet[mp] {
+				if err := s.RemoveProvider(ctx, mp); err != nil {
+					logger.Warn("FullReload: RemoveProvider %s failed: %v", mp, err)
+				}
 			}
 		}
 	}
 
-	// 3. Model configs
+	// 3. Model configs — upsert all DB model configs, remove stale
 	modelConfigs, err := s.Config.ConfigStore.GetModelConfigs(ctx)
 	if err != nil {
 		logger.Warn("FullReload: failed to list model configs: %v", err)
 	} else {
+		dbMCSet := make(map[string]bool)
 		for _, mc := range modelConfigs {
+			dbMCSet[mc.ID] = true
 			if _, err := s.ReloadModelConfig(ctx, mc.ID); err != nil {
 				logger.Warn("FullReload: model config %s reload failed: %v", mc.ID, err)
 			}
 		}
+		if govData != nil {
+			for _, mc := range govData.ModelConfigs {
+				if mc != nil && !dbMCSet[mc.ID] {
+					if err := s.RemoveModelConfig(ctx, mc.ID); err != nil {
+						logger.Warn("FullReload: RemoveModelConfig %s failed: %v", mc.ID, err)
+					}
+				}
+			}
+		}
 	}
 
-	// 4. Governance state
+	// 4. Governance state — upsert all DB entities, remove stale in-memory copies
 	virtualKeys, err := s.Config.ConfigStore.GetVirtualKeys(ctx)
 	if err != nil {
 		logger.Warn("FullReload: failed to list virtual keys: %v", err)
 	} else {
+		dbVKSet := make(map[string]bool)
 		for _, vk := range virtualKeys {
+			dbVKSet[vk.ID] = true
 			if _, err := s.ReloadVirtualKey(ctx, vk.ID); err != nil {
 				logger.Warn("FullReload: virtual key %s reload failed: %v", vk.ID, err)
+			}
+		}
+		if govData != nil {
+			for id := range govData.VirtualKeys {
+				if !dbVKSet[id] {
+					if err := s.RemoveVirtualKey(ctx, id); err != nil {
+						logger.Warn("FullReload: RemoveVirtualKey %s failed: %v", id, err)
+					}
+				}
 			}
 		}
 	}
@@ -1954,9 +2253,20 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 	if err != nil {
 		logger.Warn("FullReload: failed to list teams: %v", err)
 	} else {
+		dbTeamSet := make(map[string]bool)
 		for _, t := range teams {
+			dbTeamSet[t.ID] = true
 			if _, err := s.ReloadTeam(ctx, t.ID); err != nil {
 				logger.Warn("FullReload: team %s reload failed: %v", t.ID, err)
+			}
+		}
+		if govData != nil {
+			for id := range govData.Teams {
+				if !dbTeamSet[id] {
+					if err := s.RemoveTeam(ctx, id); err != nil {
+						logger.Warn("FullReload: RemoveTeam %s failed: %v", id, err)
+					}
+				}
 			}
 		}
 	}
@@ -1965,9 +2275,20 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 	if err != nil {
 		logger.Warn("FullReload: failed to list customers: %v", err)
 	} else {
+		dbCustSet := make(map[string]bool)
 		for _, c := range customers {
+			dbCustSet[c.ID] = true
 			if _, err := s.ReloadCustomer(ctx, c.ID); err != nil {
 				logger.Warn("FullReload: customer %s reload failed: %v", c.ID, err)
+			}
+		}
+		if govData != nil {
+			for id := range govData.Customers {
+				if !dbCustSet[id] {
+					if err := s.RemoveCustomer(ctx, id); err != nil {
+						logger.Warn("FullReload: RemoveCustomer %s failed: %v", id, err)
+					}
+				}
 			}
 		}
 	}
@@ -1976,26 +2297,49 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 	if err != nil {
 		logger.Warn("FullReload: failed to list routing rules: %v", err)
 	} else {
+		dbRRSet := make(map[string]bool)
 		for _, r := range routingRules {
+			dbRRSet[r.ID] = true
 			if err := s.ReloadRoutingRule(ctx, r.ID); err != nil {
 				logger.Warn("FullReload: routing rule %s reload failed: %v", r.ID, err)
 			}
 		}
-	}
-
-	// 5. MCP clients
-	mcpConfig, err := s.Config.ConfigStore.GetMCPConfig(ctx)
-	if err != nil {
-		logger.Warn("FullReload: failed to get MCP config: %v", err)
-	} else if mcpConfig != nil {
-		for _, client := range mcpConfig.MCPClients {
-			if err := s.ReconnectMCPClient(ctx, client.ID); err != nil {
-				logger.Warn("FullReload: MCP client %s reconnect failed: %v", client.ID, err)
+		if govData != nil {
+			for id := range govData.RoutingRules {
+				if !dbRRSet[id] {
+					if err := s.RemoveRoutingRule(ctx, id); err != nil {
+						logger.Warn("FullReload: RemoveRoutingRule %s failed: %v", id, err)
+					}
+				}
 			}
 		}
 	}
 
-	// 6. Plugin reconciliation (DB-authoritative)
+	// 5. MCP clients — reconnect all DB clients, remove stale
+	mcpConfig, err := s.Config.ConfigStore.GetMCPConfig(ctx)
+	if err != nil {
+		logger.Warn("FullReload: failed to get MCP config: %v", err)
+	} else if mcpConfig != nil {
+		dbMCPSet := make(map[string]bool)
+		for _, client := range mcpConfig.MCPClients {
+			dbMCPSet[client.ID] = true
+			if err := s.ReconnectMCPClient(ctx, client.ID); err != nil {
+				logger.Warn("FullReload: MCP client %s reconnect failed: %v", client.ID, err)
+			}
+		}
+		// Remove stale MCP clients: GetMCPClients() returns currently registered clients
+		if existingClients, err := s.Client.GetMCPClients(); err == nil {
+			for _, ec := range existingClients {
+				if !dbMCPSet[ec.Config.ID] {
+					if err := s.RemoveMCPClient(ctx, ec.Config.ID); err != nil {
+						logger.Warn("FullReload: RemoveMCPClient %s failed: %v", ec.Config.ID, err)
+					}
+				}
+			}
+		}
+	}
+
+	// 6. Plugin reconciliation (DB-authoritative, including removals)
 	if err := s.reconcilePlugins(ctx); err != nil {
 		logger.Warn("FullReload: plugin reconciliation failed: %v", err)
 	}
@@ -2118,23 +2462,22 @@ func (s *BifrostHTTPServer) InitCluster(ctx context.Context, clusterCfg *lib.Clu
 		logger,
 	)
 
-	// Run counter recovery merge
+	// Run counter recovery merge via exported methods — server package must not
+	// access unexported fields of LocalGovernanceStore directly.
 	if govStore := s.getGovernanceLocalStore(); govStore != nil {
-		// Set redis counters on governance store
-		govStore.redisCounters = governance.NewRedisCounterClient(redisClient)
-
-		if ok := govStore.RunRecoveryMerge(ctx); ok {
-			govStore.redisAvailable.Store(true)
+		if ok := govStore.InitRedis(ctx, redisClient); ok {
+			govStore.SetRedisAvailable(true)
 			logger.Info("cluster: Redis recovery merge complete, switching to Redis read path")
 		} else {
 			logger.Warn("cluster: Redis recovery merge partial/failed, staying in degraded mode")
 		}
 	}
 
-	// Start XREAD consumer goroutine
+	// Start XREAD consumer goroutine.
+	// fullReloadFn is passed separately; cursor is only persisted after it succeeds.
 	consumerID := clusterCfg.ConsumerID()
 	s.clusterCtx, s.clusterCancel = context.WithCancel(ctx)
-	go syncer.Subscribe(s.clusterCtx, consumerID, nodeID, s.handleConfigSyncEvent)
+	go syncer.Subscribe(s.clusterCtx, consumerID, nodeID, s.FullReload, s.handleConfigSyncEvent)
 
 	logger.Info("cluster: multi-node sync active (consumerID=%s)", consumerID)
 	return nil
@@ -2228,39 +2571,65 @@ func (s *BifrostHTTPServer) getGovernanceLocalStore() *governance.LocalGovernanc
 Find the `Start` or `Init` function in `server.go` where `Config` is fully initialized. Add the cluster init call after Config setup:
 
 ```go
-// Parse cluster config from config file
-var clusterCfg *lib.ClusterConfig
-if rawCluster := s.Config.RawCluster; rawCluster != nil {
-    clusterCfg = rawCluster
-}
+// Parse cluster config from config file (set in lib/config.go from ConfigData.Cluster)
 nodeID := uuid.New().String()
-if err := s.InitCluster(ctx, clusterCfg, nodeID); err != nil {
+if err := s.InitCluster(ctx, s.Config.Cluster, nodeID); err != nil {
     logger.Warn("cluster init failed, running in single-node mode: %v", err)
 }
 ```
 
-Note: `s.Config.RawCluster` requires adding `RawCluster *lib.ClusterConfig` to the `Config` struct in `lib/config.go`, and parsing the `cluster` block from `config.json` during config load. Find where the config JSON is unmarshalled and add the cluster field.
+`s.Config.Cluster` is populated from `configData.Cluster` during config load (see Step 4 below).
 
-- [ ] **Step 4: Add `RawCluster` to `lib.Config` struct and JSON parsing**
+- [ ] **Step 4: Add `Cluster` to `ConfigData` struct and JSON parsing**
 
-In `lib/config.go`, add to the `Config` struct:
+`ConfigData` in `lib/config.go` (line ~128-144) is the top-level struct parsed from `config.json`. It has a custom `UnmarshalJSON` method (line ~149) that uses an internal `TempConfigData` struct to unmarshal and then copies fields.
+
+**4a. Add `Cluster` to the top-level `ConfigData` struct (line ~143, before the closing `}`)**:
 
 ```go
-RawCluster *ClusterConfig // parsed from cluster block in config.json; nil in single-node mode
+Cluster *ClusterConfig `json:"cluster,omitempty"`
 ```
 
-In the config JSON unmarshal section, add:
+**4b. Add `Cluster` to the `TempConfigData` struct inside `UnmarshalJSON` (line ~164, before the closing `}`)**:
 
 ```go
-type rawConfigJSON struct {
-    // existing fields...
-    Cluster *ClusterConfig `json:"cluster,omitempty"`
+Cluster *ClusterConfig `json:"cluster,omitempty"`
+```
+
+**4c. Copy the field in the "Set simple fields" section (after line ~181, after `cd.WebSocket = temp.WebSocket`)**:
+
+```go
+cd.Cluster = temp.Cluster
+```
+
+**4d. In the `Config` struct (separate from `ConfigData`, the runtime config object), also add the field** — search for the `Config` struct definition and add:
+
+```go
+Cluster *ClusterConfig // populated from ConfigData.Cluster after parsing
+```
+
+**4e. After `json.Unmarshal(data, &configData)` at line 484, pass cluster config to the runtime Config**:
+
+The main parse call is at line 484:
+```go
+if err := json.Unmarshal(data, &configData); err != nil {
+    return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 }
-// After unmarshalling:
-config.RawCluster = rawJSON.Cluster
 ```
 
-(The exact location depends on how config.json is parsed in `lib/config.go`. Search for `json.Unmarshal` or `sonic.Unmarshal` in that file to find the right insertion point.)
+Later in the same function where `config` (type `*Config`) is built from `configData`, add:
+```go
+config.Cluster = configData.Cluster
+```
+
+**Then in Task 13 Step 3**, access it as `s.Config.Cluster` (not `s.Config.RawCluster`):
+
+```go
+var clusterCfg *lib.ClusterConfig
+if s.Config.Cluster != nil {
+    clusterCfg = s.Config.Cluster
+}
+```
 
 - [ ] **Step 5: Handle cluster shutdown**
 
