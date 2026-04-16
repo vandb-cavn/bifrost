@@ -121,6 +121,34 @@ func (s *BifrostHTTPServer) handleListGuardrailProfiles(ctx *fasthttp.RequestCtx
 	handlers.SendJSONWithStatus(ctx, resp, http.StatusOK)
 }
 
+type createGuardrailProfileRequest struct {
+	Name         string                 `json:"name"`
+	ProviderName string                 `json:"provider_name"`
+	Enabled      bool                   `json:"enabled"`
+	Config       map[string]interface{} `json:"config"`
+}
+
+type updateGuardrailProfileRequest struct {
+	Name         *string                 `json:"name,omitempty"`
+	ProviderName *string                 `json:"provider_name,omitempty"`
+	Enabled      *bool                   `json:"enabled,omitempty"`
+	Config       *map[string]interface{} `json:"config,omitempty"`
+}
+
+func guardrailProfileConfigJSON(config map[string]interface{}) (string, error) {
+	if config == nil {
+		return "", fmt.Errorf("config is required")
+	}
+	if len(config) == 0 {
+		return "{}", nil
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "", fmt.Errorf("marshal guardrail profile config: %w", err)
+	}
+	return string(data), nil
+}
+
 func (s *BifrostHTTPServer) handleGetGuardrailProfile(ctx *fasthttp.RequestCtx) {
 	id := ctx.UserValue("id").(string)
 	profile, err := s.Config.ConfigStore.GetGuardrailProfileByID(context.Background(), id)
@@ -137,13 +165,24 @@ func (s *BifrostHTTPServer) handleGetGuardrailProfile(ctx *fasthttp.RequestCtx) 
 }
 
 func (s *BifrostHTTPServer) handleCreateGuardrailProfile(ctx *fasthttp.RequestCtx) {
-	var profile tables.TableGuardrailProfile
-	if err := json.Unmarshal(ctx.PostBody(), &profile); err != nil {
+	var req createGuardrailProfileRequest
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
 		handlers.SendError(ctx, http.StatusBadRequest, err.Error())
 		return
 	}
-	if profile.ID == "" {
-		profile.ID = uuid.New().String()
+	configJSON, err := guardrailProfileConfigJSON(req.Config)
+	if err != nil {
+		handlers.SendError(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	profile := tables.TableGuardrailProfile{
+		ID:               uuid.New().String(),
+		Name:             req.Name,
+		ProviderName:     req.ProviderName,
+		Enabled:          req.Enabled,
+		ConfigJSON:       configJSON,
+		EncryptionStatus: tables.EncryptionStatusPlainText,
 	}
 	now := time.Now()
 	profile.CreatedAt = now
@@ -168,15 +207,37 @@ func (s *BifrostHTTPServer) handleCreateGuardrailProfile(ctx *fasthttp.RequestCt
 
 func (s *BifrostHTTPServer) handleUpdateGuardrailProfile(ctx *fasthttp.RequestCtx) {
 	id := ctx.UserValue("id").(string)
-	var profile tables.TableGuardrailProfile
-	if err := json.Unmarshal(ctx.PostBody(), &profile); err != nil {
+	var req updateGuardrailProfileRequest
+	if err := json.Unmarshal(ctx.PostBody(), &req); err != nil {
 		handlers.SendError(ctx, http.StatusBadRequest, err.Error())
 		return
 	}
-	profile.ID = id
+	profile, err := s.Config.ConfigStore.GetGuardrailProfileByID(context.Background(), id)
+	if err != nil {
+		handlers.SendError(ctx, http.StatusNotFound, err.Error())
+		return
+	}
+	if req.Name != nil {
+		profile.Name = *req.Name
+	}
+	if req.ProviderName != nil {
+		profile.ProviderName = *req.ProviderName
+	}
+	if req.Enabled != nil {
+		profile.Enabled = *req.Enabled
+	}
+	if req.Config != nil {
+		configJSON, err := guardrailProfileConfigJSON(*req.Config)
+		if err != nil {
+			handlers.SendError(ctx, http.StatusBadRequest, err.Error())
+			return
+		}
+		profile.ConfigJSON = configJSON
+		profile.EncryptionStatus = tables.EncryptionStatusPlainText
+	}
 	profile.UpdatedAt = time.Now()
 
-	if err := s.Config.ConfigStore.UpdateGuardrailProfile(context.Background(), &profile); err != nil {
+	if err := s.Config.ConfigStore.UpdateGuardrailProfile(context.Background(), profile); err != nil {
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}

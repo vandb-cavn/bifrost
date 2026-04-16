@@ -95,7 +95,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 			}),
 			invalidatesTags: (result) =>
 				result
-					? [{ type: "GuardrailProfiles", id: result.id }, "GuardrailProfiles"]
+					? [{ type: "GuardrailProfiles", id: result.id }, "GuardrailProfiles", "GuardrailRules"]
 					: ["GuardrailProfiles"],
 		}),
 
@@ -107,8 +107,8 @@ export const guardrailsApi = baseApi.injectEndpoints({
 			}),
 			invalidatesTags: (result, error, arg) =>
 				result
-					? [{ type: "GuardrailProfiles", id: result.id }, "GuardrailProfiles"]
-					: [{ type: "GuardrailProfiles", id: arg.id }, "GuardrailProfiles"],
+					? [{ type: "GuardrailProfiles", id: result.id }, "GuardrailProfiles", "GuardrailRules"]
+					: [{ type: "GuardrailProfiles", id: arg.id }, "GuardrailProfiles", "GuardrailRules"],
 		}),
 
 		deleteGuardrailProfile: builder.mutation<void, string>({
@@ -116,7 +116,11 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: `/guardrails/profiles/${id}`,
 				method: "DELETE",
 			}),
-			invalidatesTags: (result, error, id) => [{ type: "GuardrailProfiles", id }, "GuardrailProfiles"],
+			invalidatesTags: (result, error, id) => [
+				{ type: "GuardrailProfiles", id },
+				"GuardrailProfiles",
+				"GuardrailRules",
+			],
 		}),
 
 		linkGuardrailProfile: builder.mutation<void, { ruleId: string; profileId: string }>({
@@ -124,7 +128,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: `/guardrails/rules/${ruleId}/profiles/${profileId}`,
 				method: "POST",
 			}),
-			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.ruleId }],
+			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.ruleId }, "GuardrailRules"],
 		}),
 
 		unlinkGuardrailProfile: builder.mutation<void, { ruleId: string; profileId: string }>({
@@ -132,7 +136,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: `/guardrails/rules/${ruleId}/profiles/${profileId}`,
 				method: "DELETE",
 			}),
-			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.ruleId }],
+			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.ruleId }, "GuardrailRules"],
 		}),
 	}),
 });
