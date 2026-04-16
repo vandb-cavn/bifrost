@@ -116,7 +116,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: `/guardrails/profiles/${id}`,
 				method: "DELETE",
 			}),
-			invalidatesTags: ["GuardrailProfiles"],
+			invalidatesTags: (result, error, id) => [{ type: "GuardrailProfiles", id }, "GuardrailProfiles"],
 		}),
 
 		linkGuardrailProfile: builder.mutation<void, { ruleId: string; profileId: string }>({

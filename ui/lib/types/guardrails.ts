@@ -53,11 +53,11 @@ export interface CreateGuardrailRuleRequest {
 	action: "block" | "warn";
 	sampling_rate: number;
 	timeout_ms: number;
-	priority?: number;
-	scope?: "global" | "virtual_key" | "team";
-	scope_id?: string | null;
-	block_message?: string;
-	fail_open?: boolean;
+	priority: number;
+	scope: "global" | "virtual_key" | "team";
+	scope_id: string | null;
+	block_message: string;
+	fail_open: boolean;
 }
 
 export interface UpdateGuardrailRuleRequest {
