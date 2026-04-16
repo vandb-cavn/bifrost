@@ -286,7 +286,7 @@ type guardrailProfileResponse struct {
 	Name         string                 `json:"name"`
 	ProviderName string                 `json:"provider_name"`
 	Enabled      bool                   `json:"enabled"`
-	Config       map[string]interface{} `json:"config,omitempty"`
+	Config       map[string]interface{} `json:"config"`
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
 }
@@ -299,6 +299,7 @@ func toGuardrailProfileResponse(profile *tables.TableGuardrailProfile) (guardrai
 		Enabled:      profile.Enabled,
 		CreatedAt:    profile.CreatedAt,
 		UpdatedAt:    profile.UpdatedAt,
+		Config:       map[string]interface{}{},
 	}
 	if profile.ConfigJSON == "" {
 		return resp, nil
@@ -309,5 +310,8 @@ func toGuardrailProfileResponse(profile *tables.TableGuardrailProfile) (guardrai
 		return guardrailProfileResponse{}, fmt.Errorf("parse guardrail profile config: %w", err)
 	}
 	resp.Config = cfg
+	if resp.Config == nil {
+		resp.Config = map[string]interface{}{}
+	}
 	return resp, nil
 }
