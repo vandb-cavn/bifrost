@@ -408,3 +408,222 @@ transports/bifrost-http/server/
 - Async guardrail evaluation (`async: true` in enterprise — OSS always sync)
 - `redact` action (enterprise warns with potential redaction — OSS warn is pass-through only)
 - UI implementation (UI skeleton at `ui/app/workspace/guardrails/` already exists; wiring to API is a separate task)
+
+---
+
+## Section 5: Frontend UX Design (OSS UI)
+
+### Source of truth and scope
+
+The OSS frontend must treat the implemented backend handlers and table models as the source of truth. The enterprise Guardrails docs are only used as UX inspiration where they do not conflict with the current OSS API contract.
+
+This means the frontend should align to:
+
+- Rule fields returned by `TableGuardrailRule`: `name`, `description`, `enabled`, `cel_expression`, `apply_to`, `action`, `sampling_rate`, `timeout_ms`, `priority`, `scope`, `scope_id`, `block_message`, `fail_open`, `profiles`
+- Profile fields returned by `TableGuardrailProfile`: `id`, `name`, `provider_name`, `enabled`, timestamps
+- Separate link/unlink APIs for associating profiles to rules
+
+The frontend target is **ship-ready CRUD**, not a phased rollout:
+
+- `Guardrails > Configuration` is fully usable for rules CRUD + CEL validation + profile association
+- `Guardrails > Providers` is fully usable for profiles CRUD
+- The admin UI does **not** attempt to visualize runtime 246/446 outcomes beyond explanatory copy in forms
+
+### Navigation and page structure
+
+Keep the existing sidebar structure:
+
+- `Guardrails > Configuration`
+- `Guardrails > Providers`
+
+Both pages should follow the same interaction model used in `Providers` and `Plugins`:
+
+- page-level header with create action
+- table/list as the primary management surface
+- right-side sheet for create/edit
+- destructive delete confirmation dialog
+
+### Configuration page
+
+#### Rules table
+
+The rules list should move from the current minimal table to a more operational view that exposes the real backend behavior:
+
+- `Name`
+- `Apply To`
+- `Action`
+- `Priority`
+- `Scope`
+- `Profiles`
+- `Enabled`
+- `Updated`
+- row actions: edit, delete
+
+Design notes:
+
+- `Enabled` should use a readable badge/status treatment rather than a disabled switch as the main signal
+- `Profiles` should show a count plus optional compact labels for the first one or two profiles when present
+- `Scope` should render `global`, `virtual_key:<id>`, or `team:<id>` based on `scope` + `scope_id`
+- empty state should clearly tell the user to create profiles first if none exist, but must still allow CEL-only rules
+
+#### Rule editor sheet
+
+The rule editor must expose every supported rule field from the backend:
+
+- `name`
+- `description`
+- `enabled`
+- `apply_to`
+- `action`
+- `sampling_rate`
+- `timeout_ms`
+- `priority`
+- `scope`
+- `scope_id`
+- `block_message`
+- `fail_open`
+- `cel_expression`
+- linked profiles
+
+Interaction rules:
+
+- `scope_id` is only shown when `scope !== "global"`
+- `scope_id` is a plain text input in this phase; do not pull governance pickers into this scope
+- linked profiles are selected in the sheet, but persistence is handled through separate link/unlink API calls after the rule save succeeds
+- when editing an existing rule, the frontend computes the diff between current linked profile IDs and selected IDs, then performs `linkGuardrailProfile` / `unlinkGuardrailProfile`
+- create flow:
+  1. create base rule
+  2. perform link calls for selected profiles
+  3. refetch or rely on cache invalidation to hydrate final state
+- update flow:
+  1. update base rule
+  2. diff and synchronize profile links
+  3. refetch or rely on cache invalidation to hydrate final state
+
+This avoids assuming nested profile updates are supported by `PUT /api/guardrails/rules/:id`.
+
+#### CEL validation UX
+
+The CEL editor remains embedded inside the rule sheet.
+
+Validation behavior:
+
+- validation is an explicit user action via `Validate CEL`
+- the validation sample should reflect `apply_to`
+- `input` sample:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "Test message" }],
+  "model": "gpt-4o"
+}
+```
+
+- `output` sample:
+
+```json
+{
+  "messages": [{ "role": "user", "content": "Original request" }],
+  "model": "gpt-4o",
+  "output": {
+    "content": "Assistant response",
+    "finish_reason": "stop"
+  }
+}
+```
+
+- `both` uses the richer `request + output` sample
+
+The UI only needs syntax/result validation from the backend validator. It does not run profile calls or simulate fail-open/fail-closed behavior.
+
+### Providers page
+
+#### Profiles table
+
+The providers page should become the profile-management surface for guardrails. The table should show:
+
+- `Name`
+- `Provider`
+- `Enabled`
+- `Updated`
+- row actions: edit, delete
+
+The list must not expose raw secrets or full config payloads.
+
+#### Provider editor sheet
+
+The profile editor must support these provider types:
+
+- `bedrock`
+- `azure`
+- `grayswan`
+- `patronus_ai`
+- `model_armor`
+
+The editor model should be:
+
+- common fields: `name`, `provider_name`, `enabled`
+- provider-specific structured form fields that serialize into `config`
+- an `Advanced JSON` fallback editor that shows the generated config object and allows manual edits when needed
+
+Provider form expectations for this phase:
+
+- `bedrock`: `endpoint`, `guardrail_id`, optional `version`
+- `azure`: `endpoint`, `api_key`, optional `severity_threshold`
+- `grayswan`: `endpoint`, `api_key`, optional `score_threshold`
+- `patronus_ai`: `endpoint`, `api_key`, optional `evaluator`
+- `model_armor`: `project_id`, `location`, `template_id`, optional `credentials_json`
+
+The sheet should prefer the structured form by default and reserve raw JSON editing as an escape hatch rather than the primary workflow.
+
+### API contract mismatch and frontend dependency
+
+There is one material blocker in the current OSS backend contract:
+
+- `TableGuardrailProfile.ConfigJSON` is hidden from JSON responses (`json:"-"`)
+- the existing frontend types and editor flow assume a visible `config` object
+
+Without a small backend follow-up, the profile edit form cannot hydrate existing configuration correctly from:
+
+- `GET /api/guardrails/profiles`
+- `GET /api/guardrails/profiles/:id`
+
+Frontend planning should therefore treat the following as a required dependency before profile editing can be considered complete:
+
+- backend exposes decrypted profile config to the UI as `config` or equivalent response shape
+
+If that backend change is not made, the fallback is limited and not ship-ready:
+
+- create profile works
+- list profile works
+- edit profile can only update non-config metadata safely
+
+That fallback does not meet the scope of this frontend phase and should not be the planned target.
+
+### RBAC and permissions
+
+The frontend should keep the current layout-level access gate on the Guardrails workspace and align page actions to RBAC patterns already used elsewhere:
+
+- view access gates the whole section
+- create permission gates create buttons
+- update permission gates edit/save actions
+- delete permission gates destructive actions
+
+Do not introduce a separate permission model for rules vs profiles in this phase unless the existing enterprise RBAC layer already exposes that distinction.
+
+### Testing and verification expectations
+
+Frontend work should ship with the same baseline quality as other workspace admin surfaces:
+
+- unit-level coverage for form serialization helpers and provider-config builders where practical
+- interaction tests for rule save flow, especially link/unlink diff behavior
+- interaction tests for provider create/edit flows
+- E2E coverage for:
+  - create profile
+  - create rule
+  - validate CEL
+  - link profile to rule
+  - edit rule metadata
+  - delete rule/profile
+
+New and updated interactive elements should receive stable `data-testid` attributes following the existing workspace convention.

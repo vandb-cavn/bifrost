@@ -1,4 +1,4 @@
-import GuardrailsConfigurationView from "@enterprise/components/guardrails/guardrailsConfigurationView";
+import { GuardrailsConfigurationView } from "./GuardrailsConfigurationView";
 
 
 export default function GuardrailsConfigurationPage() {

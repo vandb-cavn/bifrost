@@ -107,6 +107,7 @@ func IsBuiltinPlugin(name string) bool {
 		name == prompts.PluginName ||
 		name == logging.PluginName ||
 		name == governance.PluginName ||
+		name == "guardrails" ||
 		name == compat.PluginName ||
 		name == maxim.PluginName ||
 		name == semanticcache.PluginName ||

@@ -541,3 +541,67 @@ func (pcs *PublishingConfigStore) DeleteBudget(ctx context.Context, id string, t
 	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
 	return nil
 }
+
+func (pcs *PublishingConfigStore) CreateGuardrailRule(ctx context.Context, rule *tables.TableGuardrailRule) error {
+	if err := pcs.ConfigStore.CreateGuardrailRule(ctx, rule); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_rule", Action: "upsert", ID: rule.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateGuardrailRule(ctx context.Context, rule *tables.TableGuardrailRule) error {
+	if err := pcs.ConfigStore.UpdateGuardrailRule(ctx, rule); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_rule", Action: "upsert", ID: rule.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteGuardrailRule(ctx context.Context, id string) error {
+	if err := pcs.ConfigStore.DeleteGuardrailRule(ctx, id); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_rule", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) CreateGuardrailProfile(ctx context.Context, profile *tables.TableGuardrailProfile) error {
+	if err := pcs.ConfigStore.CreateGuardrailProfile(ctx, profile); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_profile", Action: "upsert", ID: profile.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateGuardrailProfile(ctx context.Context, profile *tables.TableGuardrailProfile) error {
+	if err := pcs.ConfigStore.UpdateGuardrailProfile(ctx, profile); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_profile", Action: "upsert", ID: profile.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) DeleteGuardrailProfile(ctx context.Context, id string) error {
+	if err := pcs.ConfigStore.DeleteGuardrailProfile(ctx, id); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_profile", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) LinkGuardrailProfile(ctx context.Context, ruleID, profileID string) error {
+	if err := pcs.ConfigStore.LinkGuardrailProfile(ctx, ruleID, profileID); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_rule", Action: "upsert", ID: ruleID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UnlinkGuardrailProfile(ctx context.Context, ruleID, profileID string) error {
+	if err := pcs.ConfigStore.UnlinkGuardrailProfile(ctx, ruleID, profileID); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "guardrail_rule", Action: "upsert", ID: ruleID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	return nil
+}
