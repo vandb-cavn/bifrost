@@ -1,0 +1,154 @@
+import { baseApi } from "./baseApi";
+import {
+	GuardrailRule,
+	GuardrailProfile,
+	CreateGuardrailRuleRequest,
+	UpdateGuardrailRuleRequest,
+	CreateGuardrailProfileRequest,
+	UpdateGuardrailProfileRequest,
+	ValidateRuleRequest,
+	ValidateRuleResponse,
+} from "@/lib/types/guardrails";
+
+export const guardrailsApi = baseApi.injectEndpoints({
+	endpoints: (builder) => ({
+		// Rules
+		getGuardrailRules: builder.query<GuardrailRule[], void>({
+			query: () => ({
+				url: "/guardrails/rules",
+				method: "GET",
+			}),
+			providesTags: ["GuardrailRules"],
+		}),
+
+		getGuardrailRule: builder.query<GuardrailRule, string>({
+			query: (id) => ({
+				url: `/guardrails/rules/${id}`,
+				method: "GET",
+			}),
+			providesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg }],
+		}),
+
+		createGuardrailRule: builder.mutation<GuardrailRule, CreateGuardrailRuleRequest>({
+			query: (body) => ({
+				url: "/guardrails/rules",
+				method: "POST",
+				body,
+			}),
+			invalidatesTags: ["GuardrailRules"],
+		}),
+
+		updateGuardrailRule: builder.mutation<GuardrailRule, { id: string; data: UpdateGuardrailRuleRequest }>({
+			query: ({ id, data }) => ({
+				url: `/guardrails/rules/${id}`,
+				method: "PUT",
+				body: data,
+			}),
+			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.id }, "GuardrailRules"],
+		}),
+
+		deleteGuardrailRule: builder.mutation<void, string>({
+			query: (id) => ({
+				url: `/guardrails/rules/${id}`,
+				method: "DELETE",
+			}),
+			invalidatesTags: ["GuardrailRules"],
+		}),
+
+		validateGuardrailRule: builder.mutation<ValidateRuleResponse, ValidateRuleRequest>({
+			query: (body) => ({
+				url: "/guardrails/rules/validate",
+				method: "POST",
+				body,
+			}),
+		}),
+
+		// Profiles
+		getGuardrailProfiles: builder.query<GuardrailProfile[], void>({
+			query: () => ({
+				url: "/guardrails/profiles",
+				method: "GET",
+			}),
+			transformResponse: (response: GuardrailProfile[]) => response ?? [],
+			providesTags: (result) =>
+				result
+					? [
+							...result.map((profile) => ({ type: "GuardrailProfiles" as const, id: profile.id })),
+							"GuardrailProfiles",
+						]
+					: ["GuardrailProfiles"],
+		}),
+
+		getGuardrailProfile: builder.query<GuardrailProfile, string>({
+			query: (id) => ({
+				url: `/guardrails/profiles/${id}`,
+				method: "GET",
+			}),
+			providesTags: (result, error, arg) => [{ type: "GuardrailProfiles", id: arg }],
+		}),
+
+		createGuardrailProfile: builder.mutation<GuardrailProfile, CreateGuardrailProfileRequest>({
+			query: (body) => ({
+				url: "/guardrails/profiles",
+				method: "POST",
+				body,
+			}),
+			invalidatesTags: (result) =>
+				result
+					? [{ type: "GuardrailProfiles", id: result.id }, "GuardrailProfiles"]
+					: ["GuardrailProfiles"],
+		}),
+
+		updateGuardrailProfile: builder.mutation<GuardrailProfile, { id: string; data: UpdateGuardrailProfileRequest }>({
+			query: ({ id, data }) => ({
+				url: `/guardrails/profiles/${id}`,
+				method: "PUT",
+				body: data,
+			}),
+			invalidatesTags: (result, error, arg) =>
+				result
+					? [{ type: "GuardrailProfiles", id: result.id }, "GuardrailProfiles"]
+					: [{ type: "GuardrailProfiles", id: arg.id }, "GuardrailProfiles"],
+		}),
+
+		deleteGuardrailProfile: builder.mutation<void, string>({
+			query: (id) => ({
+				url: `/guardrails/profiles/${id}`,
+				method: "DELETE",
+			}),
+			invalidatesTags: ["GuardrailProfiles"],
+		}),
+
+		linkGuardrailProfile: builder.mutation<void, { ruleId: string; profileId: string }>({
+			query: ({ ruleId, profileId }) => ({
+				url: `/guardrails/rules/${ruleId}/profiles/${profileId}`,
+				method: "POST",
+			}),
+			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.ruleId }],
+		}),
+
+		unlinkGuardrailProfile: builder.mutation<void, { ruleId: string; profileId: string }>({
+			query: ({ ruleId, profileId }) => ({
+				url: `/guardrails/rules/${ruleId}/profiles/${profileId}`,
+				method: "DELETE",
+			}),
+			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.ruleId }],
+		}),
+	}),
+});
+
+export const {
+	useGetGuardrailRulesQuery,
+	useGetGuardrailRuleQuery,
+	useCreateGuardrailRuleMutation,
+	useUpdateGuardrailRuleMutation,
+	useDeleteGuardrailRuleMutation,
+	useValidateGuardrailRuleMutation,
+	useGetGuardrailProfilesQuery,
+	useGetGuardrailProfileQuery,
+	useCreateGuardrailProfileMutation,
+	useUpdateGuardrailProfileMutation,
+	useDeleteGuardrailProfileMutation,
+	useLinkGuardrailProfileMutation,
+	useUnlinkGuardrailProfileMutation,
+} = guardrailsApi;
