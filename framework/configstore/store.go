@@ -211,6 +211,24 @@ type ConfigStore interface {
 	UpdateRoutingRule(ctx context.Context, rule *tables.TableRoutingRule, tx ...*gorm.DB) error
 	DeleteRoutingRule(ctx context.Context, id string, tx ...*gorm.DB) error
 
+	// Guardrail rules
+	GetGuardrailRules(ctx context.Context) ([]*tables.TableGuardrailRule, error)
+	GetGuardrailRuleByID(ctx context.Context, id string) (*tables.TableGuardrailRule, error)
+	CreateGuardrailRule(ctx context.Context, rule *tables.TableGuardrailRule) error
+	UpdateGuardrailRule(ctx context.Context, rule *tables.TableGuardrailRule) error
+	DeleteGuardrailRule(ctx context.Context, id string) error
+
+	// Guardrail profiles
+	GetGuardrailProfiles(ctx context.Context) ([]*tables.TableGuardrailProfile, error)
+	GetGuardrailProfileByID(ctx context.Context, id string) (*tables.TableGuardrailProfile, error)
+	CreateGuardrailProfile(ctx context.Context, profile *tables.TableGuardrailProfile) error
+	UpdateGuardrailProfile(ctx context.Context, profile *tables.TableGuardrailProfile) error
+	DeleteGuardrailProfile(ctx context.Context, id string) error
+
+	// Link/unlink profile ↔ rule (many-to-many)
+	LinkGuardrailProfile(ctx context.Context, ruleID, profileID string) error
+	UnlinkGuardrailProfile(ctx context.Context, ruleID, profileID string) error
+
 	// Model config CRUD
 	GetModelConfigs(ctx context.Context) ([]tables.TableModelConfig, error)
 	GetModelConfigsPaginated(ctx context.Context, params ModelConfigsQueryParams) ([]tables.TableModelConfig, int64, error)

@@ -392,6 +392,9 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddFlexTierPricingColumns(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddGuardrailsTables(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -6445,6 +6448,41 @@ func migrationAddModelPricingUniqueIndex(ctx context.Context, db *gorm.DB) error
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running add_model_pricing_unique_index migration: %s", err.Error())
+	}
+	return nil
+}
+
+// migrationAddGuardrailsTables creates guardrail_rules, guardrail_profiles,
+// and the guardrail_rule_profiles join table.
+func migrationAddGuardrailsTables(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_guardrails_tables",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+			if !mgr.HasTable(&tables.TableGuardrailProfile{}) {
+				if err := mgr.CreateTable(&tables.TableGuardrailProfile{}); err != nil {
+					return err
+				}
+			}
+			if !mgr.HasTable(&tables.TableGuardrailRule{}) {
+				if err := mgr.CreateTable(&tables.TableGuardrailRule{}); err != nil {
+					return err
+				}
+			}
+			return tx.AutoMigrate(&tables.TableGuardrailRule{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+			_ = mgr.DropTable("guardrail_rule_profiles")
+			_ = mgr.DropTable(&tables.TableGuardrailRule{})
+			_ = mgr.DropTable(&tables.TableGuardrailProfile{})
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_guardrails_tables migration: %w", err)
 	}
 	return nil
 }

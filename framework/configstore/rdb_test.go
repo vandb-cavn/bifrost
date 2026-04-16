@@ -49,12 +49,18 @@ func setupRDBTestStore(t *testing.T) *RDBConfigStore {
 		&tables.TableGovernanceConfig{},
 		&tables.TableFrameworkConfig{},
 		&tables.TablePricingOverride{},
+		&tables.TableGuardrailProfile{},
+		&tables.TableGuardrailRule{},
 	)
 	require.NoError(t, err, "Failed to migrate test database")
 
 	// Setup join table
 	err = db.SetupJoinTable(&tables.TableVirtualKeyProviderConfig{}, "Keys", &tables.TableVirtualKeyProviderConfigKey{})
 	require.NoError(t, err, "Failed to setup join table")
+
+	// Many2many join table for guardrail rules ↔ profiles
+	err = db.AutoMigrate(&tables.TableGuardrailRule{})
+	require.NoError(t, err, "Failed to migrate guardrail join")
 
 	return &RDBConfigStore{
 		db:     db,

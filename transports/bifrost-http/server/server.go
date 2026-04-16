@@ -1003,6 +1003,21 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 		}
 	}
 
+	if s.Config.ConfigStore != nil {
+		if gp, err := s.getGuardrailsPlugin(); err == nil {
+			if rules, err := s.Config.ConfigStore.GetGuardrailRules(ctx); err == nil {
+				gp.ReloadRules(rules)
+			} else {
+				logger.Warn("FullReload: failed to list guardrail rules: %v", err)
+			}
+			if profiles, err := s.Config.ConfigStore.GetGuardrailProfiles(ctx); err == nil {
+				gp.ReloadProfiles(profiles)
+			} else {
+				logger.Warn("FullReload: failed to list guardrail profiles: %v", err)
+			}
+		}
+	}
+
 	mcpConfig, err := s.Config.ConfigStore.GetMCPConfig(ctx)
 	if err != nil {
 		logger.Warn("FullReload: failed to get MCP config: %v", err)
@@ -1213,6 +1228,38 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 			_ = s.RemoveRoutingRule(ctx, event.ID)
 		} else {
 			_ = s.ReloadRoutingRule(ctx, event.ID)
+		}
+	case "guardrail_rule":
+		gp, err := s.getGuardrailsPlugin()
+		if err != nil {
+			logger.Warn("cluster sync: guardrails plugin not loaded: %v", err)
+			return
+		}
+		if event.Action == "delete" {
+			gp.DeleteRule(event.ID)
+		} else {
+			rule, err := s.Config.ConfigStore.GetGuardrailRuleByID(ctx, event.ID)
+			if err != nil {
+				logger.Warn("cluster sync: GetGuardrailRuleByID %s failed: %v", event.ID, err)
+				return
+			}
+			gp.UpsertRule(rule)
+		}
+	case "guardrail_profile":
+		gp, err := s.getGuardrailsPlugin()
+		if err != nil {
+			logger.Warn("cluster sync: guardrails plugin not loaded: %v", err)
+			return
+		}
+		if event.Action == "delete" {
+			gp.DeleteProfile(event.ID)
+		} else {
+			profile, err := s.Config.ConfigStore.GetGuardrailProfileByID(ctx, event.ID)
+			if err != nil {
+				logger.Warn("cluster sync: GetGuardrailProfileByID %s failed: %v", event.ID, err)
+				return
+			}
+			gp.UpsertProfile(profile)
 		}
 	case "mcp_client":
 		if event.Action == "delete" {
@@ -1698,6 +1745,7 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	if governanceHandler != nil {
 		governanceHandler.RegisterRoutes(s.Router, middlewares...)
 	}
+	s.registerGuardrailsRoutes(middlewares...)
 	if loggingHandler != nil {
 		loggingHandler.RegisterRoutes(s.Router, middlewares...)
 	}
