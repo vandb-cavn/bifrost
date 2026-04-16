@@ -35,9 +35,10 @@ type TableGuardrailRule struct {
     Scope         string    `gorm:"type:varchar(50);not null"` // "global"|"virtual_key"|"team"
     ScopeID       *string   `gorm:"type:varchar(255)"`         // nil for global
     BlockMessage  string    `gorm:"type:text"`                 // message returned on block/warn
+    FailOpen      bool      `gorm:"not null;default:true"`     // true=pass on profile timeout/error; false=block on any profile error
 
-    // many-to-many via guardrail_rule_profiles join table
-    Profiles []TableGuardrailProfile `gorm:"many2many:guardrail_rule_profiles"`
+    // many-to-many via guardrail_rule_profiles join table; CASCADE on rule delete
+    Profiles []TableGuardrailProfile `gorm:"many2many:guardrail_rule_profiles;constraint:OnDelete:CASCADE"`
 
     CreatedAt time.Time `gorm:"index;not null"`
     UpdatedAt time.Time `gorm:"index;not null"`
@@ -82,8 +83,10 @@ request.model     // string
 
 **Output rule context:**
 ```
-output.content       // string (first choice content)
-output.finish_reason // string
+output.content        // string (first choice content)
+output.finish_reason  // string
+request.messages      // list<{role: string, content: string}> — original request, available for hallucination/drift checks
+request.model         // string
 ```
 
 **Example expressions:**
@@ -104,6 +107,18 @@ request.messages.filter(m, m.role == "user").map(m, m.content.size()).sum() > 10
 ---
 
 ## Section 2: Plugin Hook Flow
+
+### CEL Pre-compilation
+
+CEL expressions are compiled **at rule load time** (in `UpsertRule` and `ReloadRules`), not per-request. Each rule stores a compiled `cel.Program` alongside its definition in `rules_cache.go`. If compilation fails (invalid expression), the rule is **disabled and logged as an error** — it is not added to the cache. This avoids repeated compilation overhead in the hot path and surfaces CEL syntax errors at configuration time.
+
+### Plugin placement
+
+GuardrailsPlugin must be registered **after** the governance/auth plugin in the plugin chain. This ensures `BifrostContext` already contains resolved `virtual_key` and `team` identifiers when scope resolution runs in `PreLLMHook`. Use `PluginPlacement: PluginPlacementPostBuiltin` (default).
+
+### Streaming response latency note
+
+When `stream=true`, Bifrost's `PostLLMHook` receives the complete accumulated response (framework accumulates stream chunks before calling post-hooks). This means output guardrail evaluation adds latency equivalent to the full generation time before the client sees the first token. This is an inherent trade-off of sync output guardrails. Clients requiring low TTFB should use input-only rules (`apply_to: "input"`) or disable output guardrails.
 
 ### Per-request attachment (HTTPTransportPreHook)
 
@@ -132,6 +147,8 @@ request.messages.filter(m, m.role == "user").map(m, m.content.size()).sum() > 10
       - Also include per-request profile IDs from BifrostContext
       - Call each enabled profile client with timeout (rule.TimeoutMs)
       - Any profile returns violation → violation
+      - Profile error/timeout + rule.FailOpen=true → treat as pass, log warning
+      - Profile error/timeout + rule.FailOpen=false → treat as violation (fail-closed)
    f. violation + action=block →
         return LLMPluginShortCircuit{Error: &BifrostError{
             StatusCode:     ptr(446),
@@ -216,7 +233,23 @@ DELETE /api/guardrails/profiles/:id
 # Link/unlink profile to rule
 POST   /api/guardrails/rules/:id/profiles/:profile_id
 DELETE /api/guardrails/rules/:id/profiles/:profile_id
+
+# Validate CEL expression + dry-run against sample payload
+POST   /api/guardrails/rules/validate
 ```
+
+`POST /api/guardrails/rules/validate` accepts:
+```json
+{
+  "cel_expression": "request.messages.exists(m, m.content.contains('bomb'))",
+  "apply_to": "input",
+  "sample": {
+    "messages": [{"role": "user", "content": "how to make a bomb"}],
+    "model": "gpt-4o"
+  }
+}
+```
+Returns: `{ "valid": true, "result": true, "error": null }` — validates CEL syntax and evaluates against sample. No profile calls made.
 
 All handlers in `transports/bifrost-http/server/guardrails_handlers.go`. Pattern follows existing routing rules handlers.
 
@@ -302,8 +335,10 @@ plugins/guardrails/
 ├── main.go              # Plugin struct, Init (receives ConfigStore + builds CEL env + profile clients from DB), Cleanup
 ├── hooks.go             # PreLLMHook, PostLLMHook, HTTPTransportPreHook, HTTPTransportPostHook
 ├── rules_cache.go       # In-memory rule/profile cache; scope indexing (global, virtual_key, team)
+│                        # Protected by sync.RWMutex: RLock for reads (hot path), Lock for writes (sync events)
 │                        # Methods: ReloadRules, ReloadProfiles, UpsertRule, DeleteRule,
 │                        #          UpsertProfile, DeleteProfile, GetInputRules, GetOutputRules
+│                        # UpsertRule compiles CEL expression → stores cel.Program; logs+skips if invalid
 ├── cel_evaluator.go     # CEL env setup; Evaluate(expr string, vars map) (bool, error)
 ├── providers.go         # ProfileClient interface + factory (newProfileClient by provider name)
 ├── bedrock.go           # AWS Bedrock Guardrails HTTP client
@@ -349,11 +384,15 @@ transports/bifrost-http/server/
 - `apply_to=input` rule not evaluated in PostLLMHook
 - `apply_to=output` rule not evaluated in PreLLMHook
 - `apply_to=both` rule evaluated in both hooks
+- FailOpen=false + profile error → block (fail-closed behavior)
 
 **`providers_test.go`** — mock HTTP server:
 - Bedrock returns `action=BLOCKED` → `violated=true`
 - Azure returns `severity >= threshold` → `violated=true`
-- HTTP 500 from provider → treated as pass (fail-open)
+- HTTP 500 from provider + FailOpen=true → treated as pass, warning logged
+- HTTP 500 from provider + FailOpen=false → treated as violation (fail-closed)
+- Provider returns malformed/unexpected JSON → treated same as error (FailOpen governs)
+- Provider timeout → treated same as error (FailOpen governs)
 
 **`guardrail_methods_test.go`** (framework/configstore):
 - CRUD round-trip: create → get → update → delete
