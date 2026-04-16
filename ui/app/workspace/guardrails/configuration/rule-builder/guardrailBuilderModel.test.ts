@@ -66,9 +66,48 @@ describe("serializeGuardrailQuery", () => {
 			}),
 		).toBe('request.model.startsWith("gpt-4")');
 	});
+
+	it("serializes a request-message empty rule with a closing exists parenthesis", () => {
+		expect(
+			serializeGuardrailQuery({
+				combinator: "and",
+				rules: [
+					{
+						field: "request_message",
+						operator: "is_empty",
+					},
+				],
+			}),
+		).toBe('request.messages.exists(m, m.content == "")');
+	});
 });
 
 describe("importGuardrailQuery", () => {
+	it("imports a request-message empty rule", () => {
+		expect(importGuardrailQuery('request.messages.exists(m, m.content == "")')).toEqual({
+			combinator: "and",
+			rules: [
+				{
+					field: "request_message",
+					operator: "is_empty",
+				},
+			],
+		});
+	});
+
+	it("wraps a supported single rule in a builder group", () => {
+		expect(importGuardrailQuery('output.content.contains("policy")')).toEqual({
+			combinator: "and",
+			rules: [
+				{
+					field: "response_content",
+					operator: "contains",
+					value: "policy",
+				},
+			],
+		});
+	});
+
 	it("imports a supported builder-generated expression", () => {
 		expect(
 			importGuardrailQuery(

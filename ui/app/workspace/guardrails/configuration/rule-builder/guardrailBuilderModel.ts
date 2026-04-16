@@ -4,12 +4,12 @@ export type GuardrailBuilderField =
 	| "response_content"
 	| "response_finish_reason";
 
-export type GuardrailBuilderOperator = "contains" | "equals" | "starts_with" | "ends_with" | "is_empty";
+export type GuardrailBuilderOperator = "contains" | "equals" | "starts_with" | "ends_with";
 
 export type GuardrailBuilderRule =
 	| {
 			field: GuardrailBuilderField;
-			operator: Exclude<GuardrailBuilderOperator, "is_empty">;
+			operator: GuardrailBuilderOperator;
 			value: string;
 	  }
 	| {
@@ -69,11 +69,11 @@ function serializeRule(rule: GuardrailBuilderRule): string {
 
 	if (rule.field === "request_message") {
 		if (rule.operator === "is_empty") {
-			return `${fieldPath} == ""`;
+			return `${fieldPath} == ""` + ")";
 		}
 
 		if (rule.operator === "equals") {
-			return `${fieldPath} == ${quoteCELString(rule.value)})`;
+			return `${fieldPath} == ${quoteCELString(rule.value)}` + ")";
 		}
 
 		return `${fieldPath}.${celMethodByOperator[rule.operator]}(${quoteCELString(rule.value)}))`;
@@ -326,8 +326,15 @@ function importGroup(expression: string): GuardrailBuilderGroup | GuardrailBuild
 
 export function importGuardrailQuery(expression: string): GuardrailBuilderGroup | null {
 	const imported = importGroup(expression);
-	if (!imported || "field" in imported) {
+	if (!imported) {
 		return null;
+	}
+
+	if ("field" in imported) {
+		return {
+			combinator: "and",
+			rules: [imported],
+		};
 	}
 
 	return imported;
