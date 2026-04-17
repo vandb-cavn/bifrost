@@ -15,6 +15,7 @@ type TableGuardrailProfile struct {
 	Name             string    `gorm:"type:varchar(255);not null" json:"name"`
 	ProviderName     string    `gorm:"type:varchar(50);not null" json:"provider_name"` // "bedrock"|"azure"|...
 	Enabled          bool      `gorm:"not null;default:true" json:"enabled"`
+	TimeoutMs        int       `gorm:"not null;default:10000" json:"timeout_ms"` // per-profile call timeout
 	ConfigJSON       string    `gorm:"type:text" json:"-"`
 	EncryptionStatus string    `gorm:"type:varchar(20);default:'plain_text'" json:"-"`
 	CreatedAt        time.Time `gorm:"index;not null" json:"created_at"`

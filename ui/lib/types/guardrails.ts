@@ -5,6 +5,7 @@ export interface GuardrailProfile {
 	name: string;
 	provider_name: GuardrailProviderName;
 	enabled: boolean;
+	timeout_ms: number;
 	config: Record<string, unknown>;
 	created_at: string;
 	updated_at: string;
@@ -34,6 +35,7 @@ export interface CreateGuardrailProfileRequest {
 	name: string;
 	provider_name: GuardrailProviderName;
 	enabled: boolean;
+	timeout_ms: number;
 	config: Record<string, unknown>;
 }
 
@@ -41,6 +43,7 @@ export interface UpdateGuardrailProfileRequest {
 	name?: string;
 	provider_name?: GuardrailProviderName;
 	enabled?: boolean;
+	timeout_ms?: number;
 	config?: Record<string, unknown>;
 }
 
@@ -74,7 +77,6 @@ export interface UpdateGuardrailRuleRequest {
 	scope_id?: string | null;
 	block_message?: string;
 	fail_open?: boolean;
-	profiles?: GuardrailProfile[];
 }
 
 export interface ValidateRuleRequest {

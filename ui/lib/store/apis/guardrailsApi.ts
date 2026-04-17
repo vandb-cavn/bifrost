@@ -10,6 +10,24 @@ import {
 	ValidateRuleResponse,
 } from "@/lib/types/guardrails";
 
+function normalizeGuardrailRule(rule: GuardrailRule): GuardrailRule {
+	return {
+		...rule,
+		description: rule.description ?? "",
+		block_message: rule.block_message ?? "",
+		scope_id: rule.scope_id ?? null,
+		profiles: rule.profiles ?? [],
+	};
+}
+
+function normalizeGuardrailProfile(profile: GuardrailProfile): GuardrailProfile {
+	return {
+		...profile,
+		timeout_ms: profile.timeout_ms ?? 10000,
+		config: profile.config ?? {},
+	};
+}
+
 export const guardrailsApi = baseApi.injectEndpoints({
 	endpoints: (builder) => ({
 		// Rules
@@ -18,7 +36,11 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: "/guardrails/rules",
 				method: "GET",
 			}),
-			providesTags: ["GuardrailRules"],
+			transformResponse: (response: GuardrailRule[]) => (response ?? []).map(normalizeGuardrailRule),
+			providesTags: (result) =>
+				result
+					? [...result.map((rule) => ({ type: "GuardrailRules" as const, id: rule.id })), "GuardrailRules"]
+					: ["GuardrailRules"],
 		}),
 
 		getGuardrailRule: builder.query<GuardrailRule, string>({
@@ -26,6 +48,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: `/guardrails/rules/${id}`,
 				method: "GET",
 			}),
+			transformResponse: (response: GuardrailRule) => normalizeGuardrailRule(response),
 			providesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg }],
 		}),
 
@@ -35,7 +58,10 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				method: "POST",
 				body,
 			}),
-			invalidatesTags: ["GuardrailRules"],
+			invalidatesTags: (result) =>
+				result
+					? [{ type: "GuardrailRules", id: result.id }, "GuardrailRules"]
+					: ["GuardrailRules"],
 		}),
 
 		updateGuardrailRule: builder.mutation<GuardrailRule, { id: string; data: UpdateGuardrailRuleRequest }>({
@@ -44,7 +70,10 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				method: "PUT",
 				body: data,
 			}),
-			invalidatesTags: (result, error, arg) => [{ type: "GuardrailRules", id: arg.id }, "GuardrailRules"],
+			invalidatesTags: (result, error, arg) =>
+				result
+					? [{ type: "GuardrailRules", id: result.id }, "GuardrailRules"]
+					: [{ type: "GuardrailRules", id: arg.id }, "GuardrailRules"],
 		}),
 
 		deleteGuardrailRule: builder.mutation<void, string>({
@@ -69,7 +98,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: "/guardrails/profiles",
 				method: "GET",
 			}),
-			transformResponse: (response: GuardrailProfile[]) => response ?? [],
+			transformResponse: (response: GuardrailProfile[]) => (response ?? []).map(normalizeGuardrailProfile),
 			providesTags: (result) =>
 				result
 					? [
@@ -84,6 +113,7 @@ export const guardrailsApi = baseApi.injectEndpoints({
 				url: `/guardrails/profiles/${id}`,
 				method: "GET",
 			}),
+			transformResponse: (response: GuardrailProfile) => normalizeGuardrailProfile(response),
 			providesTags: (result, error, arg) => [{ type: "GuardrailProfiles", id: arg }],
 		}),
 

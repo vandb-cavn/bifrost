@@ -395,6 +395,9 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddGuardrailsTables(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddGuardrailProfileTimeout(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -6448,6 +6451,38 @@ func migrationAddModelPricingUniqueIndex(ctx context.Context, db *gorm.DB) error
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running add_model_pricing_unique_index migration: %s", err.Error())
+	}
+	return nil
+}
+
+// migrationAddGuardrailProfileTimeout adds the timeout_ms column to guardrail_profiles
+// so that each provider profile can define its own call timeout.
+func migrationAddGuardrailProfileTimeout(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_guardrail_profile_timeout",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+			if !mgr.HasColumn(&tables.TableGuardrailProfile{}, "timeout_ms") {
+				if err := mgr.AddColumn(&tables.TableGuardrailProfile{}, "timeout_ms"); err != nil {
+					return err
+				}
+				// Back-fill existing rows with the default 10s.
+				return tx.Exec("UPDATE guardrail_profiles SET timeout_ms = 10000 WHERE timeout_ms IS NULL OR timeout_ms = 0").Error
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			mgr := tx.Migrator()
+			if mgr.HasColumn(&tables.TableGuardrailProfile{}, "timeout_ms") {
+				return mgr.DropColumn(&tables.TableGuardrailProfile{}, "timeout_ms")
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_guardrail_profile_timeout migration: %w", err)
 	}
 	return nil
 }
