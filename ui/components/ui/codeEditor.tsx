@@ -5,13 +5,42 @@ import { Loader2 } from "lucide-react";
 import { editor } from "monaco-editor";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { Textarea } from "./textarea";
 
 // Dynamically import Monaco Editor with SSR disabled
 const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default), {
 	ssr: false,
 	loading: () => <Loader2 className="h-4 w-4 animate-spin p-4" />,
 });
+
+class MonacoErrorBoundary extends React.Component<
+	{ fallback: React.ReactNode; children: React.ReactNode },
+	{ hasError: boolean }
+> {
+	constructor(props: { fallback: React.ReactNode; children: React.ReactNode }) {
+		super(props);
+		this.state = { hasError: false };
+	}
+
+	static getDerivedStateFromError() {
+		return { hasError: true };
+	}
+
+	componentDidCatch(error: unknown) {
+		if (error instanceof Error) {
+			console.warn("Monaco editor failed to load, falling back to textarea:", error.message);
+		}
+	}
+
+	render() {
+		if (this.state.hasError) {
+			return this.props.fallback;
+		}
+
+		return this.props.children;
+	}
+}
 
 export type CompletionItem = {
 	label: string;
@@ -173,6 +202,25 @@ export function CodeEditor(props: CodeEditorProps) {
 		...props.options,
 	} as editor.IStandaloneEditorConstructionOptions;
 
+	const renderFallbackEditor = () => {
+		return (
+			<Textarea
+				value={code || ""}
+				onChange={(event) => onChange?.(event.target.value)}
+				readOnly={props.readonly}
+				className={cn(
+					"font-mono text-md w-full resize-none bg-white dark:bg-input/30",
+					props.readonly && "cursor-default",
+					className,
+				)}
+				style={{
+					height: typeof editorHeight === "number" ? `${editorHeight}px` : editorHeight,
+					width: props.width,
+				}}
+			/>
+		);
+	};
+
 	if (!isClient) {
 		return (
 			<div className={cn("group relative flex h-24 w-full items-center justify-center", props.containerClassName)}>
@@ -183,58 +231,60 @@ export function CodeEditor(props: CodeEditorProps) {
 
 	return (
 		<div id={props.id} ref={editorContainer} className={cn("group relative h-full w-full", props.containerClassName)} onBlur={props.onBlur}>
-			<MonacoEditor
-				height={editorHeight}
-				width={props.width}
-				language={lang || "javascript"}
-				value={code || ""}
-				theme={getTheme()}
-				options={editorOptions}
-				loading={<Loader2 className="h-4 w-4 animate-spin" />}
-				onChange={(value) => {
-					if (onChange) {
-						onChange(value || "");
-					}
-				}}
-				onMount={handleEditorDidMount}
-				className={cn("code text-md w-full bg-transparent ring-offset-transparent outline-none", className)}
-				beforeMount={(monaco) => {
-					// Configure Monaco for static exports
-					// This is a hack to disable web workers when using the editor in a static export, do not change this.
-					if (typeof window !== "undefined") {
-						// Disable web workers
-						(window as any).MonacoEnvironment = {
-							getWorker: () => {
-								return {
-									postMessage: () => {},
-									terminate: () => {},
-									addEventListener: () => {},
-									removeEventListener: () => {},
-									dispatchEvent: () => false,
-									onerror: null,
-									onmessage: null,
-									onmessageerror: null,
-								};
-							},
-						};
+			<MonacoErrorBoundary fallback={renderFallbackEditor()}>
+				<MonacoEditor
+					height={editorHeight}
+					width={props.width}
+					language={lang || "javascript"}
+					value={code || ""}
+					theme={getTheme()}
+					options={editorOptions}
+					loading={<Loader2 className="h-4 w-4 animate-spin" />}
+					onChange={(value) => {
+						if (onChange) {
+							onChange(value || "");
+						}
+					}}
+					onMount={handleEditorDidMount}
+					className={cn("code text-md w-full bg-transparent ring-offset-transparent outline-none", className)}
+					beforeMount={(monaco) => {
+						// Configure Monaco for static exports
+						// This is a hack to disable web workers when using the editor in a static export, do not change this.
+						if (typeof window !== "undefined") {
+							// Disable web workers
+							(window as any).MonacoEnvironment = {
+								getWorker: () => {
+									return {
+										postMessage: () => {},
+										terminate: () => {},
+										addEventListener: () => {},
+										removeEventListener: () => {},
+										dispatchEvent: () => false,
+										onerror: null,
+										onmessage: null,
+										onmessageerror: null,
+									};
+								},
+							};
 
-						// Define custom dark theme with transparent background
-						monaco.editor.defineTheme("custom-dark", {
-							base: "vs-dark",
-							inherit: true,
-							rules: [],
-							colors: {
-								"editor.background": "#00000000",
-								focusBorder: "#00000000",
-								"editor.lineHighlightBorder": "#00000000",
-								"editor.selectionHighlightBorder": "#00000000",
-								"editorWidget.border": "#00000000",
-								"editorOverviewRuler.border": "#00000000",
-							},
-						});
-					}
-				}}
-			/>
+							// Define custom dark theme with transparent background
+							monaco.editor.defineTheme("custom-dark", {
+								base: "vs-dark",
+								inherit: true,
+								rules: [],
+								colors: {
+									"editor.background": "#00000000",
+									focusBorder: "#00000000",
+									"editor.lineHighlightBorder": "#00000000",
+									"editor.selectionHighlightBorder": "#00000000",
+									"editorWidget.border": "#00000000",
+									"editorOverviewRuler.border": "#00000000",
+								},
+							});
+						}
+					}}
+				/>
+			</MonacoErrorBoundary>
 		</div>
 	);
 }

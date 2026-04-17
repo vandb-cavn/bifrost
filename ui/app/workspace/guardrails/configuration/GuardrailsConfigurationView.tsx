@@ -14,13 +14,11 @@ export function GuardrailsConfigurationView() {
 	const [editingRule, setEditingRule] = useState<GuardrailRule | null>(null);
 
 	// Permissions
-	const canCreate = useRbac(RbacResource.Guardrails, RbacOperation.Create);
-	const canDelete = useRbac(RbacResource.Guardrails, RbacOperation.Delete);
+	const canCreate = useRbac(RbacResource.GuardrailsConfig, RbacOperation.Create);
+	const canDelete = useRbac(RbacResource.GuardrailsConfig, RbacOperation.Delete);
 
 	// API
-	const { data: rules, isLoading } = useGetGuardrailRulesQuery(undefined, {
-		pollingInterval: 5000,
-	});
+	const { data: rules, isLoading } = useGetGuardrailRulesQuery();
 
 	const handleCreateNew = () => {
 		setEditingRule(null);
@@ -41,22 +39,23 @@ export function GuardrailsConfigurationView() {
 
 	return (
 		<div className="space-y-4">
-			{/* Header */}
 			<div className="flex items-center justify-between">
 				<div>
 					<h1 className="text-foreground text-lg font-semibold">Guardrail Rules</h1>
-					<p className="text-muted-foreground text-sm">Configure guardrail rules to control when to execute guardrails.</p>
+					<p className="text-muted-foreground text-sm">
+						Define when requests and responses should be checked, and which guardrail profiles should run.
+					</p>
 				</div>
 				<div className="flex items-center gap-2">
 					{canCreate && (
 						<Button
-							data-testid="create-guardrail-rule-btn"
+							data-testid="guardrails-rules-create-button"
 							onClick={handleCreateNew}
 							disabled={isLoading}
 							className="gap-2"
 						>
 							<Plus className="h-4 w-4" />
-							<span className="hidden sm:inline">Add New Rule</span>
+							<span className="hidden sm:inline">Add Rule</span>
 						</Button>
 					)}
 				</div>

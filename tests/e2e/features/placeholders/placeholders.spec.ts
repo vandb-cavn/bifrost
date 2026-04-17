@@ -17,12 +17,6 @@ test.describe('Placeholder and Enterprise Pages', () => {
     await popup.close()
   })
 
-  test('should load guardrails page', async ({ page }) => {
-    await page.goto('/workspace/guardrails')
-    await page.waitForLoadState('networkidle')
-    await expect(page).toHaveURL(/\/workspace\/guardrails(?:\?.*)?$/)
-  })
-
   test('should load audit-logs page', async ({ page }) => {
     await page.goto('/workspace/audit-logs')
     await page.waitForLoadState('networkidle')
@@ -64,15 +58,4 @@ test.describe('Placeholder and Enterprise Pages', () => {
     await popup.close()
   })
 
-  test('should load guardrails configuration page', async ({ page }) => {
-    await page.goto('/workspace/guardrails/configuration')
-    await page.waitForLoadState('networkidle')
-    await expect(page).toHaveURL(/\/workspace\/guardrails\/configuration(?:\?.*)?$/)
-  })
-
-  test('should load guardrails providers page', async ({ page }) => {
-    await page.goto('/workspace/guardrails/providers')
-    await page.waitForLoadState('networkidle')
-    await expect(page).toHaveURL(/\/workspace\/guardrails\/providers(?:\?.*)?$/)
-  })
 })

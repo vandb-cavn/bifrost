@@ -2,6 +2,7 @@
 
 import { GuardrailProfile } from "@/lib/types/guardrails";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
 	AlertDialog,
@@ -18,6 +19,8 @@ import { useState } from "react";
 import { useDeleteGuardrailProfileMutation } from "@/lib/store/apis/guardrailsApi";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/lib/store";
+import { formatDistanceToNow } from "date-fns";
+import { guardrailProviderLabels } from "../shared/profileConfig";
 
 interface ProviderProfilesTableProps {
 	providerName: string;
@@ -60,7 +63,9 @@ export function ProviderProfilesTable({
 			<div className="flex items-center justify-between">
 				<h2 className="text-lg font-semibold">{providerName} Configurations</h2>
 				{canCreate && (
-					<Button onClick={onCreateNew}>Add new configuration</Button>
+					<Button onClick={onCreateNew} data-testid="guardrails-profiles-create-button">
+						Add configuration
+					</Button>
 				)}
 			</div>
 
@@ -68,44 +73,58 @@ export function ProviderProfilesTable({
 				<Table>
 					<TableHeader>
 						<TableRow className="bg-muted/50">
-							<TableHead className="font-semibold">ID</TableHead>
 							<TableHead className="font-semibold">Name</TableHead>
-							<TableHead className="font-semibold">Is Enabled</TableHead>
+							<TableHead className="font-semibold">Provider</TableHead>
+							<TableHead className="font-semibold">Status</TableHead>
+							<TableHead className="font-semibold">Updated</TableHead>
 							<TableHead className="text-right font-semibold">Actions</TableHead>
 						</TableRow>
 					</TableHeader>
 					<TableBody>
 						{isLoading ? (
 							<TableRow>
-								<TableCell colSpan={4} className="h-10">
+								<TableCell colSpan={5} className="h-10">
 									<div className="bg-muted h-2 w-32 animate-pulse rounded" />
 								</TableCell>
 							</TableRow>
 						) : profiles.length === 0 ? (
 							<TableRow>
-								<TableCell colSpan={4} className="h-24 text-center">
+								<TableCell colSpan={5} className="h-24 text-center">
 									<span className="text-muted-foreground text-sm">No configurations found.</span>
 								</TableCell>
 							</TableRow>
 						) : (
 							profiles.map((profile) => (
-								<TableRow key={profile.id} className="hover:bg-muted/50 transition-colors">
-									<TableCell>
-										<span className="font-mono text-xs">{profile.id.substring(0, 8)}...</span>
-									</TableCell>
+								<TableRow key={profile.id} data-testid={`guardrails-profile-row-${profile.id}`} className="hover:bg-muted/50 transition-colors">
 									<TableCell className="font-medium">{profile.name}</TableCell>
 									<TableCell>
-										<span className={profile.enabled ? "text-primary" : "text-muted-foreground"}>
-											{profile.enabled ? "Yes" : "No"}
-										</span>
+										{guardrailProviderLabels[profile.provider_name]}
+									</TableCell>
+									<TableCell>
+										{profile.enabled ? <Badge>Enabled</Badge> : <Badge variant="secondary">Disabled</Badge>}
+									</TableCell>
+									<TableCell>
+										{formatDistanceToNow(new Date(profile.updated_at), { addSuffix: true })}
 									</TableCell>
 									<TableCell className="text-right">
 										<div className="flex items-center justify-end gap-2">
-											<Button variant="ghost" size="sm" onClick={() => onEdit(profile)}>
+											<Button
+												variant="ghost"
+												size="sm"
+												onClick={() => onEdit(profile)}
+												data-testid={`guardrails-profile-edit-${profile.id}`}
+												aria-label="Edit guardrail profile"
+											>
 												<Edit className="h-4 w-4" />
 											</Button>
 											{canDelete && (
-												<Button variant="ghost" size="sm" onClick={() => setDeleteProfileId(profile.id)}>
+												<Button
+													variant="ghost"
+													size="sm"
+													onClick={() => setDeleteProfileId(profile.id)}
+													data-testid={`guardrails-profile-delete-${profile.id}`}
+													aria-label="Delete guardrail profile"
+												>
 													<Trash2 className="h-4 w-4 text-destructive" />
 												</Button>
 											)}

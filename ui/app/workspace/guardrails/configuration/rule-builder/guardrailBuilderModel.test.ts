@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	getGuardrailBuilderFields,
 	importGuardrailQuery,
+	isGuardrailBuilderGroupCompatible,
 	serializeGuardrailQuery,
 } from "./guardrailBuilderModel";
 
@@ -50,6 +52,21 @@ describe("serializeGuardrailQuery", () => {
 		).toBe(
 			'request.messages.exists(m, m.content.contains("secret \\"phrase\\"")) && (output.content.contains("policy") || output.finish_reason == "stop")',
 		);
+	});
+
+	it("serializes tabs in string literals", () => {
+		expect(
+			serializeGuardrailQuery({
+				combinator: "and",
+				rules: [
+					{
+						field: "request_message",
+						operator: "contains",
+						value: "secret\tvalue",
+					},
+				],
+			}),
+		).toBe('request.messages.exists(m, m.content.contains("secret\\tvalue"))');
 	});
 
 	it("serializes a starts-with rule", () => {
@@ -142,5 +159,45 @@ describe("importGuardrailQuery", () => {
 
 	it("returns null for unsupported expressions", () => {
 		expect(importGuardrailQuery('request.user.contains("secret")')).toBeNull();
+	});
+
+	it("imports request-message expressions with flexible whitespace", () => {
+		expect(importGuardrailQuery('request.messages.exists( m , m.content.contains("secret") )')).toEqual({
+			combinator: "and",
+			rules: [
+				{
+					field: "request_message",
+					operator: "contains",
+					value: "secret",
+				},
+			],
+		});
+	});
+});
+
+describe("guardrail builder field compatibility", () => {
+	it("limits input builders to request fields", () => {
+		expect(getGuardrailBuilderFields("input").map((field) => field.name)).toEqual([
+			"request_message",
+			"request_model",
+		]);
+	});
+
+	it("rejects response fields for input-only builders", () => {
+		expect(
+			isGuardrailBuilderGroupCompatible(
+				{
+					combinator: "and",
+					rules: [
+						{
+							field: "response_content",
+							operator: "contains",
+							value: "policy",
+						},
+					],
+				},
+				"input",
+			),
+		).toBe(false);
 	});
 });

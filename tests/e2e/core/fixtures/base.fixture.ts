@@ -15,6 +15,7 @@ import { MCPAuthConfigPage } from '../../features/mcp-auth-config/pages/mcp-auth
 import { MCPSettingsPage } from '../../features/mcp-settings/pages/mcp-settings.page'
 import { MCPToolGroupsPage } from '../../features/mcp-tool-groups/pages/mcp-tool-groups.page'
 import { ModelLimitsPage } from '../../features/model-limits/pages/model-limits.page'
+import { GuardrailsPage } from '../../features/guardrails/pages/guardrails.page'
 
 /**
  * Custom test fixtures type
@@ -37,6 +38,7 @@ type BifrostFixtures = {
   mcpSettingsPage: MCPSettingsPage
   mcpToolGroupsPage: MCPToolGroupsPage
   mcpAuthConfigPage: MCPAuthConfigPage
+  guardrailsPage: GuardrailsPage
 }
 
 /**
@@ -49,7 +51,9 @@ export const test = base.extend<BifrostFixtures>({
     await page.addLocatorHandler(
       page.getByText('Dev Profiler', { exact: true }),
       async () => {
-        await page.locator('button[title="Dismiss"]').click({ force: true })
+        const dismissButtons = page.getByRole('button', { name: 'Dismiss' })
+        const dismiss = dismissButtons.last()
+        await dismiss.click({ force: true }).catch(() => {})
       }
     )
     await use()
@@ -117,6 +121,10 @@ export const test = base.extend<BifrostFixtures>({
 
   mcpAuthConfigPage: async ({ page }, use) => {
     await use(new MCPAuthConfigPage(page))
+  },
+
+  guardrailsPage: async ({ page }, use) => {
+    await use(new GuardrailsPage(page))
   },
 })
 

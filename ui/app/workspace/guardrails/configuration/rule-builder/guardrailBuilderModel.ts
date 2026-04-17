@@ -4,6 +4,8 @@ export type GuardrailBuilderField =
 	| "response_content"
 	| "response_finish_reason";
 
+export type GuardrailBuilderApplyTo = "input" | "output" | "both";
+
 export type GuardrailBuilderOperator = "contains" | "equals" | "starts_with" | "ends_with";
 
 export type GuardrailBuilderRule =
@@ -34,6 +36,38 @@ export const defaultGuardrailBuilderGroup: GuardrailBuilderGroup = {
 	rules: [],
 };
 
+type GuardrailBuilderFieldDefinition = (typeof guardrailBuilderFields)[number];
+
+const allGuardrailBuilderFields: ReadonlyArray<GuardrailBuilderFieldDefinition> = guardrailBuilderFields;
+
+const allowedFieldsByApplyTo: Record<GuardrailBuilderApplyTo, readonly GuardrailBuilderField[]> = {
+	input: ["request_message", "request_model"],
+	output: ["request_message", "request_model", "response_content", "response_finish_reason"],
+	both: ["request_message", "request_model", "response_content", "response_finish_reason"],
+};
+
+function isGuardrailBuilderFieldAllowed(field: GuardrailBuilderField, applyTo: GuardrailBuilderApplyTo): boolean {
+	return allowedFieldsByApplyTo[applyTo].includes(field);
+}
+
+export function getGuardrailBuilderFields(applyTo: GuardrailBuilderApplyTo): ReadonlyArray<GuardrailBuilderFieldDefinition> {
+	return allGuardrailBuilderFields.filter((field) => isGuardrailBuilderFieldAllowed(field.name, applyTo));
+}
+
+function isGuardrailBuilderRuleCompatible(rule: GuardrailBuilderRule, applyTo: GuardrailBuilderApplyTo): boolean {
+	return isGuardrailBuilderFieldAllowed(rule.field, applyTo);
+}
+
+export function isGuardrailBuilderGroupCompatible(group: GuardrailBuilderGroup, applyTo: GuardrailBuilderApplyTo): boolean {
+	return group.rules.every((rule) => {
+		if ("rules" in rule) {
+			return isGuardrailBuilderGroupCompatible(rule, applyTo);
+		}
+
+		return isGuardrailBuilderRuleCompatible(rule, applyTo);
+	});
+}
+
 const fieldPathByName: Record<GuardrailBuilderField, string> = {
 	request_message: "request.messages.exists(m, m.content",
 	request_model: "request.model",
@@ -49,19 +83,15 @@ const celMethodByOperator: Record<Exclude<GuardrailBuilderOperator, "equals" | "
 
 const fieldImportPatterns: Record<GuardrailBuilderField, RegExp> = {
 	request_message:
-		/^request\.messages\.exists\(m,\s*m\.content(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\)$/u,
-	request_model: /^request\.model(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))$/u,
-	response_content: /^output\.content(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))$/u,
+		/^request\.messages\.exists\(\s*m\s*,\s*m\.content(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*\)$/u,
+	request_model: /^request\.model(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*$/u,
+	response_content: /^output\.content(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*$/u,
 	response_finish_reason:
-		/^output\.finish_reason(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))$/u,
+		/^output\.finish_reason(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*$/u,
 };
 
-function escapeCELString(value: string): string {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r");
-}
-
 function quoteCELString(value: string): string {
-	return `"${escapeCELString(value)}"`;
+	return JSON.stringify(value);
 }
 
 function serializeRule(rule: GuardrailBuilderRule): string {
