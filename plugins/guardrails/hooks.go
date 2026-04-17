@@ -127,23 +127,33 @@ func (p *GuardrailsPlugin) evaluateRule(ctx *schemas.BifrostContext, cr *cachedR
 		p.logger.Info("[guardrails] rule %q (%s) violated — reason=%q", rule.Name, rule.ID, reason)
 		return p.applyAction(ctx, rule, reason, isOutput), nil
 	}
+	// CEL triggered but no profile violation — warn-action rules still need to apply
+	// (block rules are suppressed when profiles clear the content).
+	if rule.Action == "warn" {
+		return p.applyAction(ctx, rule, "", isOutput), nil
+	}
 	return nil, nil
 }
 
-func (p *GuardrailsPlugin) evaluateProfiles(ctx *schemas.BifrostContext, rule *configstoreTables.TableGuardrailRule, content string, isOutput bool, extraProfileIDs []string) (bool, string) {
-	timeout := time.Duration(rule.TimeoutMs) * time.Millisecond
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-	if timeout < 0 {
-		timeout = 0
-	}
-	evalCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+const defaultProfileTimeoutMs = 10000
 
+// resolveProfileTimeout returns the effective timeout for a single profile call.
+// It is the minimum of the rule-level timeout and the profile-level timeout,
+// so the profile's global cap can never be exceeded by an individual rule.
+func (p *GuardrailsPlugin) resolveProfileTimeout(pid string, ruleTimeoutMs int) time.Duration {
+	profileTimeoutMs := defaultProfileTimeoutMs
+	if profile := p.cache.getProfile(pid); profile != nil && profile.TimeoutMs > 0 {
+		profileTimeoutMs = profile.TimeoutMs
+	}
+
+	effective := profileTimeoutMs
+	if ruleTimeoutMs > 0 && ruleTimeoutMs < effective {
+		effective = ruleTimeoutMs
+	}
+	return time.Duration(effective) * time.Millisecond
+}
+
+func (p *GuardrailsPlugin) evaluateProfiles(ctx *schemas.BifrostContext, rule *configstoreTables.TableGuardrailRule, content string, isOutput bool, extraProfileIDs []string) (bool, string) {
 	seen := make(map[string]struct{})
 	var ordered []string
 	for _, pr := range rule.Profiles {
@@ -174,18 +184,32 @@ func (p *GuardrailsPlugin) evaluateProfiles(ctx *schemas.BifrostContext, rule *c
 			continue
 		}
 
+		// Effective timeout = min(rule.TimeoutMs, profile.TimeoutMs) so the
+		// profile's global cap is never exceeded by a per-rule override.
+		timeout := p.resolveProfileTimeout(pid, rule.TimeoutMs)
+		if deadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(deadline); remaining < timeout {
+				timeout = remaining
+			}
+		}
+		if timeout < 0 {
+			timeout = 0
+		}
+		profileCtx, cancel := context.WithTimeout(ctx, timeout)
+
 		var violated bool
 		var reason string
 		var err error
 		if isOutput {
 			if ma, ok := client.(*modelArmorClient); ok {
-				violated, reason, err = ma.EvaluateResponse(evalCtx, content)
+				violated, reason, err = ma.EvaluateResponse(profileCtx, content)
 			} else {
-				violated, reason, err = client.Evaluate(evalCtx, content)
+				violated, reason, err = client.Evaluate(profileCtx, content)
 			}
 		} else {
-			violated, reason, err = client.Evaluate(evalCtx, content)
+			violated, reason, err = client.Evaluate(profileCtx, content)
 		}
+		cancel()
 
 		if err != nil {
 			p.logger.Warn("guardrails: profile %q eval error: %v — failOpen=%v", pid, err, rule.FailOpen)

@@ -218,6 +218,66 @@ func TestHooks_ProfileErrorFailClosed(t *testing.T) {
 	assert.Equal(t, 446, *sc.Error.StatusCode)
 }
 
+func TestHooks_WarnWithProfileClearedStillSetsWarnedKey(t *testing.T) {
+	// Regression: warn rule with a profile that does NOT violate should still set the warned
+	// context key — the CEL expression triggered, the profile just didn't find a violation.
+	p := newTestPlugin(t)
+	profileID := uuid.New().String()
+	p.clients[profileID] = &mockProfileClient{violated: false}
+
+	profile := &configstoreTables.TableGuardrailProfile{
+		ID: profileID, Name: "mock-profile", ProviderName: "bedrock", Enabled: true,
+		ConfigJSON: "{}", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	p.cache.upsertProfile(profile)
+
+	rule := &configstoreTables.TableGuardrailRule{
+		ID: uuid.New().String(), Name: "warn-with-profile", Enabled: true,
+		CelExpression: "true", Profiles: []configstoreTables.TableGuardrailProfile{*profile},
+		ApplyTo: "input", Action: "warn", SamplingRate: 100,
+		TimeoutMs: 5000, Scope: "global", FailOpen: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, p.cache.upsertRule(rule))
+
+	ctx := makeBifrostContext()
+	req := makeBifrostRequest("gpt-4o", "test")
+	_, sc, err := p.PreLLMHook(ctx, req)
+	require.NoError(t, err)
+	assert.Nil(t, sc)
+
+	warned, _ := ctx.Value(guardrailWarnedKey).(bool)
+	assert.True(t, warned)
+}
+
+func TestHooks_BlockWithProfileClearedDoesNotBlock(t *testing.T) {
+	// Block rule with a profile that clears the content should not block the request.
+	p := newTestPlugin(t)
+	profileID := uuid.New().String()
+	p.clients[profileID] = &mockProfileClient{violated: false}
+
+	profile := &configstoreTables.TableGuardrailProfile{
+		ID: profileID, Name: "mock-profile", ProviderName: "bedrock", Enabled: true,
+		ConfigJSON: "{}", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	p.cache.upsertProfile(profile)
+
+	rule := &configstoreTables.TableGuardrailRule{
+		ID: uuid.New().String(), Name: "block-with-profile", Enabled: true,
+		CelExpression: "true", Profiles: []configstoreTables.TableGuardrailProfile{*profile},
+		ApplyTo: "input", Action: "block", SamplingRate: 100,
+		TimeoutMs: 5000, Scope: "global", FailOpen: true,
+		BlockMessage: "blocked", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, p.cache.upsertRule(rule))
+
+	ctx := makeBifrostContext()
+	req := makeBifrostRequest("gpt-4o", "test")
+	_, sc, err := p.PreLLMHook(ctx, req)
+	require.NoError(t, err)
+	assert.Nil(t, sc)
+}
+
 func TestHooks_InputRuleNotEvaluatedInPostHook(t *testing.T) {
 	p := newTestPlugin(t)
 	rule := &configstoreTables.TableGuardrailRule{
