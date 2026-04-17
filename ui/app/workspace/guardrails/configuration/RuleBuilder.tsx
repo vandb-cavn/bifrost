@@ -10,12 +10,12 @@ import { CheckCircle, Copy, Loader2, Plus, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { QueryBuilder } from "react-querybuilder";
-import "react-querybuilder/dist/query-builder.css";
 import { toast } from "sonner";
 import {
 	defaultGuardrailBuilderGroup,
-	guardrailBuilderFields,
+	getGuardrailBuilderFields,
 	importGuardrailQuery,
+	isGuardrailBuilderGroupCompatible,
 	serializeGuardrailQuery,
 	type GuardrailBuilderGroup,
 } from "./rule-builder/guardrailBuilderModel";
@@ -30,11 +30,6 @@ interface RuleBuilderProps {
 type RuleBuilderMode = "builder" | "editor";
 
 type BuilderOperator = "contains" | "equals" | "starts_with" | "ends_with" | "is_empty";
-
-const builderFields = guardrailBuilderFields.map((field) => ({
-	name: field.name,
-	label: field.label,
-}));
 
 const builderOperators: Array<{ name: BuilderOperator; label: string }> = [
 	{ name: "contains", label: "contains" },
@@ -51,10 +46,13 @@ function createEmptyGroup(): GuardrailBuilderGroup {
 	};
 }
 
-function getInitialState(expression: string): { mode: RuleBuilderMode; query: GuardrailBuilderGroup } {
+function getInitialState(
+	expression: string,
+	applyTo: RuleBuilderProps["applyTo"],
+): { mode: RuleBuilderMode; query: GuardrailBuilderGroup } {
 	const imported = importGuardrailQuery(expression);
 
-	if (imported) {
+	if (imported && isGuardrailBuilderGroupCompatible(imported, applyTo)) {
 		return {
 			mode: "builder",
 			query: imported,
@@ -74,28 +72,36 @@ function getInitialState(expression: string): { mode: RuleBuilderMode; query: Gu
 	};
 }
 
-function BuilderFieldSelector({ value, handleOnChange, options }: any) {
+function getCompatibleImportedQuery(expression: string, applyTo: RuleBuilderProps["applyTo"]): GuardrailBuilderGroup | null {
+	const imported = importGuardrailQuery(expression);
+	if (!imported || !isGuardrailBuilderGroupCompatible(imported, applyTo)) {
+		return null;
+	}
+
+	return imported;
+}
+
+function BuilderFieldSelector({ value, handleOnChange, options, allowedFieldNames }: any) {
+	const allowedNames = new Set(Array.isArray(allowedFieldNames) ? allowedFieldNames : []);
+	const visibleOptions = options.filter((option: any) => {
+		if ("options" in option || !option.name) {
+			return false;
+		}
+
+		return allowedNames.size === 0 || allowedNames.has(option.name);
+	});
+
 	return (
 		<Select value={value || ""} onValueChange={handleOnChange}>
 			<SelectTrigger className="w-[220px] bg-white dark:bg-input/30" data-testid="guardrails-builder-field-select">
 				<SelectValue placeholder="Select field" />
 			</SelectTrigger>
 			<SelectContent>
-				{options.map((option: any) => {
-					if ("options" in option) {
-						return null;
-					}
-
-					if (!option.name) {
-						return null;
-					}
-
-					return (
-						<SelectItem key={option.name} value={option.name} disabled={option.disabled}>
-							{option.label}
-						</SelectItem>
-					);
-				})}
+				{visibleOptions.map((option: any) => (
+					<SelectItem key={option.name} value={option.name} disabled={option.disabled}>
+						{option.label}
+					</SelectItem>
+				))}
 			</SelectContent>
 		</Select>
 	);
@@ -191,73 +197,25 @@ function BuilderCombinatorSelector({ value, handleOnChange, options }: any) {
 	);
 }
 
+const QUERY_BUILDER_CSS = `
+.guardrails-query-builder .queryBuilder { font-family: inherit; }
+.guardrails-query-builder .ruleGroup { background-color: hsl(var(--muted) / 0.28); border: 1px solid hsl(var(--border)); border-radius: 0.5rem; margin-bottom: 0.5rem; }
+.guardrails-query-builder .ruleGroup .ruleGroup { background-color: hsl(var(--background)); }
+.guardrails-query-builder .ruleGroup-header { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 0.75rem 0.5rem; }
+.guardrails-query-builder .ruleGroup-body { display: flex; flex-direction: column; gap: 0.5rem; padding: 0 0.75rem 0.75rem; }
+.guardrails-query-builder .rule { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.75rem; background-color: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.375rem; }
+.guardrails-query-builder .rule > * { flex-shrink: 0; }
+.guardrails-query-builder .ruleGroup-addRule, .guardrails-query-builder .ruleGroup-addGroup { margin-top: 0.25rem; }
+.guardrails-query-builder .ruleGroup-header .ruleGroup-addRule, .guardrails-query-builder .ruleGroup-header .ruleGroup-addGroup { margin-top: 0; }
+.guardrails-query-builder .ruleGroup .ruleGroup .ruleGroup-header .ruleGroup-remove { margin-left: 0.5rem; }
+.guardrails-query-builder .queryBuilder-branches .ruleGroup-body { padding-left: 1rem; }
+`;
+
 function QueryBuilderSurface({ children }: { children: ReactNode }) {
 	return (
 		<div className="guardrails-query-builder">
-			<style jsx global>{`
-				.guardrails-query-builder .queryBuilder {
-					font-family: inherit;
-				}
-
-				.guardrails-query-builder .ruleGroup {
-					background-color: hsl(var(--muted) / 0.28);
-					border: 1px solid hsl(var(--border));
-					border-radius: 0.5rem;
-					margin-bottom: 0.5rem;
-				}
-
-				.guardrails-query-builder .ruleGroup .ruleGroup {
-					background-color: hsl(var(--background));
-				}
-
-				.guardrails-query-builder .ruleGroup-header {
-					display: flex;
-					align-items: center;
-					flex-wrap: wrap;
-					gap: 0.5rem;
-					padding: 0.75rem 0.75rem 0.5rem;
-				}
-
-				.guardrails-query-builder .ruleGroup-body {
-					display: flex;
-					flex-direction: column;
-					gap: 0.5rem;
-					padding: 0 0.75rem 0.75rem;
-				}
-
-				.guardrails-query-builder .rule {
-					display: flex;
-					flex-wrap: wrap;
-					align-items: center;
-					gap: 0.5rem;
-					padding: 0.75rem;
-					background-color: hsl(var(--background));
-					border: 1px solid hsl(var(--border));
-					border-radius: 0.375rem;
-				}
-
-				.guardrails-query-builder .rule > * {
-					flex-shrink: 0;
-				}
-
-				.guardrails-query-builder .ruleGroup-addRule,
-				.guardrails-query-builder .ruleGroup-addGroup {
-					margin-top: 0.25rem;
-				}
-
-				.guardrails-query-builder .ruleGroup-header .ruleGroup-addRule,
-				.guardrails-query-builder .ruleGroup-header .ruleGroup-addGroup {
-					margin-top: 0;
-				}
-
-				.guardrails-query-builder .ruleGroup .ruleGroup .ruleGroup-header .ruleGroup-remove {
-					margin-left: 0.5rem;
-				}
-
-				.guardrails-query-builder .queryBuilder-branches .ruleGroup-body {
-					padding-left: 1rem;
-				}
-			`}</style>
+			{/* eslint-disable-next-line react/no-danger */}
+			<style dangerouslySetInnerHTML={{ __html: QUERY_BUILDER_CSS }} />
 			{children}
 		</div>
 	);
@@ -270,9 +228,11 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 		result?: boolean;
 		error?: string;
 	} | null>(null);
-	const [mode, setMode] = useState<RuleBuilderMode>(() => getInitialState(value).mode);
-	const [builderQuery, setBuilderQuery] = useState<GuardrailBuilderGroup>(() => getInitialState(value).query);
+	const [mode, setMode] = useState<RuleBuilderMode>(() => getInitialState(value, applyTo).mode);
+	const [builderQuery, setBuilderQuery] = useState<GuardrailBuilderGroup>(() => getInitialState(value, applyTo).query);
 	const lastSyncedValueRef = useRef(value);
+	const lastSyncedApplyToRef = useRef(applyTo);
+	const builderFields = useMemo(() => getGuardrailBuilderFields(applyTo), [applyTo]);
 
 	const validationSample = useMemo(() => getGuardrailBuilderSample(applyTo), [applyTo]);
 	const builderExpression = useMemo(() => serializeGuardrailQuery(builderQuery), [builderQuery]);
@@ -280,11 +240,11 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 	const validationContextLabel = validationSample.output ? "Request + response sample" : "Request-only sample";
 
 	useEffect(() => {
-		if (value === lastSyncedValueRef.current) {
+		if (value === lastSyncedValueRef.current && applyTo === lastSyncedApplyToRef.current) {
 			return;
 		}
 
-		const imported = importGuardrailQuery(value);
+		const imported = getCompatibleImportedQuery(value, applyTo);
 		if (imported) {
 			setBuilderQuery(imported);
 			setMode("builder");
@@ -296,7 +256,18 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 		}
 
 		lastSyncedValueRef.current = value;
-	}, [value]);
+		lastSyncedApplyToRef.current = applyTo;
+	}, [value, applyTo]);
+
+	useEffect(() => {
+		if (mode !== "builder") {
+			return;
+		}
+
+		if (!isGuardrailBuilderGroupCompatible(builderQuery, applyTo)) {
+			setMode("editor");
+		}
+	}, [applyTo, builderQuery, mode]);
 
 	useEffect(() => {
 		setValidationResult(null);
@@ -313,7 +284,7 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 		lastSyncedValueRef.current = nextValue;
 		onChange(nextValue);
 
-		const imported = importGuardrailQuery(nextValue);
+		const imported = getCompatibleImportedQuery(nextValue, applyTo);
 		if (imported) {
 			setBuilderQuery(imported);
 		}
@@ -325,7 +296,7 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 			return;
 		}
 
-		const imported = importGuardrailQuery(value);
+		const imported = getCompatibleImportedQuery(value, applyTo);
 		if (imported) {
 			setBuilderQuery(imported);
 			setMode("builder");
@@ -408,13 +379,16 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 						<div className="overflow-hidden rounded-md border bg-background">
 							<QueryBuilderSurface>
 								<QueryBuilderComponent
+									key={applyTo}
 									fields={builderFields}
 									query={builderQuery}
 									onQueryChange={handleBuilderChange}
 									operators={builderOperators}
 									controlClassnames={{ queryBuilder: "queryBuilder-branches" }}
 									controlElements={{
-										fieldSelector: BuilderFieldSelector,
+										fieldSelector: (props: any) => (
+											<BuilderFieldSelector {...props} allowedFieldNames={builderFields.map((field) => field.name)} />
+										),
 										operatorSelector: BuilderOperatorSelector,
 										valueEditor: BuilderValueEditor,
 										addRuleAction: BuilderActionButton,
