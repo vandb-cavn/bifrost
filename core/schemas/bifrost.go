@@ -40,6 +40,9 @@ const (
 	Anthropic   ModelProvider = "anthropic"
 	Bedrock     ModelProvider = "bedrock"
 	Cohere      ModelProvider = "cohere"
+	Tavily      ModelProvider = "tavily"
+	Brave       ModelProvider = "brave"
+	Exa         ModelProvider = "exa_ai"
 	Vertex      ModelProvider = "vertex"
 	Mistral     ModelProvider = "mistral"
 	Ollama      ModelProvider = "ollama"
@@ -76,6 +79,7 @@ var StandardProviders = []ModelProvider{
 	Anthropic,
 	Azure,
 	Bedrock,
+	Brave,
 	Cerebras,
 	Cohere,
 	Gemini,
@@ -85,7 +89,9 @@ var StandardProviders = []ModelProvider{
 	OpenAI,
 	Parasail,
 	Perplexity,
+	Exa,
 	SGL,
+	Tavily,
 	Vertex,
 	OpenRouter,
 	Elevenlabs,
@@ -109,6 +115,7 @@ const (
 	ChatCompletionStreamRequest  RequestType = "chat_completion_stream"
 	ResponsesRequest             RequestType = "responses"
 	ResponsesStreamRequest       RequestType = "responses_stream"
+	SearchRequest                RequestType = "search"
 	EmbeddingRequest             RequestType = "embedding"
 	SpeechRequest                RequestType = "speech"
 	SpeechStreamRequest          RequestType = "speech_stream"
@@ -362,6 +369,7 @@ type BifrostRequest struct {
 	TextCompletionRequest        *BifrostTextCompletionRequest
 	ChatRequest                  *BifrostChatRequest
 	ResponsesRequest             *BifrostResponsesRequest
+	SearchRequest                *BifrostSearchRequest
 	CountTokensRequest           *BifrostResponsesRequest
 	EmbeddingRequest             *BifrostEmbeddingRequest
 	RerankRequest                *BifrostRerankRequest
@@ -411,6 +419,8 @@ func (br *BifrostRequest) GetRequestFields() (provider ModelProvider, model stri
 		return br.ChatRequest.Provider, br.ChatRequest.Model, br.ChatRequest.Fallbacks
 	case br.ResponsesRequest != nil:
 		return br.ResponsesRequest.Provider, br.ResponsesRequest.Model, br.ResponsesRequest.Fallbacks
+	case br.SearchRequest != nil:
+		return br.SearchRequest.Provider, br.SearchRequest.Model, br.SearchRequest.Fallbacks
 	case br.CountTokensRequest != nil:
 		return br.CountTokensRequest.Provider, br.CountTokensRequest.Model, br.CountTokensRequest.Fallbacks
 	case br.EmbeddingRequest != nil:
@@ -530,6 +540,8 @@ func (br *BifrostRequest) SetProvider(provider ModelProvider) {
 		br.ChatRequest.Provider = provider
 	case br.ResponsesRequest != nil:
 		br.ResponsesRequest.Provider = provider
+	case br.SearchRequest != nil:
+		br.SearchRequest.Provider = provider
 	case br.CountTokensRequest != nil:
 		br.CountTokensRequest.Provider = provider
 	case br.EmbeddingRequest != nil:
@@ -571,6 +583,8 @@ func (br *BifrostRequest) SetModel(model string) {
 		br.ChatRequest.Model = model
 	case br.ResponsesRequest != nil:
 		br.ResponsesRequest.Model = model
+	case br.SearchRequest != nil:
+		br.SearchRequest.Model = model
 	case br.CountTokensRequest != nil:
 		br.CountTokensRequest.Model = model
 	case br.EmbeddingRequest != nil:
@@ -606,6 +620,8 @@ func (br *BifrostRequest) SetFallbacks(fallbacks []Fallback) {
 		br.ChatRequest.Fallbacks = fallbacks
 	case br.ResponsesRequest != nil:
 		br.ResponsesRequest.Fallbacks = fallbacks
+	case br.SearchRequest != nil:
+		br.SearchRequest.Fallbacks = fallbacks
 	case br.CountTokensRequest != nil:
 		br.CountTokensRequest.Fallbacks = fallbacks
 	case br.EmbeddingRequest != nil:
@@ -637,6 +653,8 @@ func (br *BifrostRequest) SetRawRequestBody(rawRequestBody []byte) {
 		br.ChatRequest.RawRequestBody = rawRequestBody
 	case br.ResponsesRequest != nil:
 		br.ResponsesRequest.RawRequestBody = rawRequestBody
+	case br.SearchRequest != nil:
+		br.SearchRequest.RawRequestBody = rawRequestBody
 	case br.CountTokensRequest != nil:
 		br.CountTokensRequest.RawRequestBody = rawRequestBody
 	case br.EmbeddingRequest != nil:
@@ -712,6 +730,7 @@ type BifrostResponse struct {
 	TextCompletionResponse        *BifrostTextCompletionResponse
 	ChatResponse                  *BifrostChatResponse
 	ResponsesResponse             *BifrostResponsesResponse
+	SearchResponse                *BifrostSearchResponse
 	ResponsesStreamResponse       *BifrostResponsesStreamResponse
 	CountTokensResponse           *BifrostCountTokensResponse
 	EmbeddingResponse             *BifrostEmbeddingResponse
@@ -760,6 +779,8 @@ func (r *BifrostResponse) GetExtraFields() *BifrostResponseExtraFields {
 		return &r.ChatResponse.ExtraFields
 	case r.ResponsesResponse != nil:
 		return &r.ResponsesResponse.ExtraFields
+	case r.SearchResponse != nil:
+		return &r.SearchResponse.ExtraFields
 	case r.ResponsesStreamResponse != nil:
 		return &r.ResponsesStreamResponse.ExtraFields
 	case r.CountTokensResponse != nil:
@@ -866,6 +887,11 @@ func (r *BifrostResponse) PopulateExtraFields(requestType RequestType, provider 
 		r.ResponsesResponse.ExtraFields.Provider = provider
 		r.ResponsesResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.ResponsesResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+	case r.SearchResponse != nil:
+		r.SearchResponse.ExtraFields.RequestType = requestType
+		r.SearchResponse.ExtraFields.Provider = provider
+		r.SearchResponse.ExtraFields.OriginalModelRequested = originalModelRequested
+		r.SearchResponse.ExtraFields.ResolvedModelUsed = resolvedModel
 	case r.ResponsesStreamResponse != nil:
 		r.ResponsesStreamResponse.ExtraFields.RequestType = requestType
 		r.ResponsesStreamResponse.ExtraFields.Provider = provider
