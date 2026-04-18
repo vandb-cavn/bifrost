@@ -69,6 +69,7 @@ curl --location 'http://localhost:8080/api/providers' \
             "chat_completion_stream": true,
             "responses": false,
             "responses_stream": false,
+            "search": false,
             "embedding": false,
             "speech": false,
             "speech_stream": false,
@@ -108,6 +109,7 @@ curl --location 'http://localhost:8080/api/providers' \
                     "chat_completion_stream": true,
                     "responses": false,
                     "responses_stream": false,
+                    "search": false,
                     "embedding": false,
                     "speech": false,
                     "speech_stream": false,
@@ -200,6 +202,7 @@ func (a *MyAccount) GetConfigForProvider(provider schemas.ModelProvider) (*schem
                     ChatCompletionStream: true,  // Enable streaming
                     Responses:            false,
                     ResponsesStream:      false,
+                    Search:               false,
                     Embedding:            false,
                     Speech:               false,
                     SpeechStream:         false,
@@ -239,6 +242,7 @@ Available operations:
 - **`chat_completion_stream`**: Streaming chat responses
 - **`responses`**: Standard responses requests
 - **`responses_stream`**: Streaming responses requests
+- **`search`**: Search requests
 - **`embedding`**: Text embedding generation
 - **`speech`**: Text-to-speech conversion
 - **`speech_stream`**: Streaming text-to-speech
@@ -309,7 +313,8 @@ When a full URL (with scheme and host) is provided in `request_path_overrides`, 
             "base_provider_type": "openai",
             "allowed_requests": {
                 "chat_completion": true,
-                "chat_completion_stream": true
+                "chat_completion_stream": true,
+                "search": false
             },
             "request_path_overrides": {
                 "chat_completion": "/api/v2/chat",
@@ -347,7 +352,8 @@ These options are mutually exclusive. Do not set `insecure_skip_verify: true` to
             "base_provider_type": "openai",
             "allowed_requests": {
                 "chat_completion": true,
-                "chat_completion_stream": true
+                "chat_completion_stream": true,
+                "search": false
             }
         }
     }
@@ -368,7 +374,8 @@ These options are mutually exclusive. Do not set `insecure_skip_verify: true` to
             "base_provider_type": "openai",
             "allowed_requests": {
                 "chat_completion": true,
-                "chat_completion_stream": true
+                "chat_completion_stream": true,
+                "search": false
             }
         }
     }
@@ -394,6 +401,7 @@ Create different configurations for production, staging, and development environ
             "allowed_requests": {
                 "chat_completion": true,
                 "chat_completion_stream": true,
+                "search": false,
                 "embedding": true,
                 "speech": true,
                 "speech_stream": true
@@ -407,6 +415,7 @@ Create different configurations for production, staging, and development environ
             "allowed_requests": {
                 "chat_completion": true,
                 "chat_completion_stream": true,
+                "search": false,
                 "embedding": true,
                 "speech": false,
                 "speech_stream": false
@@ -420,6 +429,7 @@ Create different configurations for production, staging, and development environ
             "allowed_requests": {
                 "chat_completion": true,
                 "chat_completion_stream": false,
+                "search": false,
                 "embedding": false,
                 "speech": false,
                 "speech_stream": false
@@ -442,6 +452,7 @@ Restrict capabilities based on user roles or team permissions. You can then crea
             "allowed_requests": {
                 "chat_completion": true,
                 "chat_completion_stream": true,
+                "search": false,
                 "embedding": true,
                 "text_completion": true
             }
@@ -453,6 +464,7 @@ Restrict capabilities based on user roles or team permissions. You can then crea
             "base_provider_type": "openai",
             "allowed_requests": {
                 "chat_completion": true,
+                "search": false,
                 "embedding": true
             }
         }
@@ -463,7 +475,8 @@ Restrict capabilities based on user roles or team permissions. You can then crea
             "base_provider_type": "openai",
             "allowed_requests": {
                 "chat_completion": true,
-                "chat_completion_stream": false
+                "chat_completion_stream": false,
+                "search": false
             }
         }
     }
@@ -483,6 +496,7 @@ Test new features with limited user groups:
             "allowed_requests": {
                 "chat_completion": true,
                 "chat_completion_stream": true,
+                "search": false,
                 "embedding": false
             }
         }
@@ -494,6 +508,7 @@ Test new features with limited user groups:
             "allowed_requests": {
                 "chat_completion": true,
                 "chat_completion_stream": false,
+                "search": false,
                 "embedding": true
             }
         }

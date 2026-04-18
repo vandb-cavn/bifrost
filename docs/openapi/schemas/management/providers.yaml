@@ -268,6 +268,8 @@ AllowedRequests:
       type: boolean
     responses_stream:
       type: boolean
+    search:
+      type: boolean
     count_tokens:
       type: boolean
     embedding:
