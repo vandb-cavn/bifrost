@@ -28,6 +28,7 @@
   COPY core /core
   COPY framework /framework
   COPY plugins/governance /plugins/governance
+  COPY plugins/guardrails /plugins/guardrails
 
   COPY transports/go.mod transports/go.sum ./
   RUN go mod download

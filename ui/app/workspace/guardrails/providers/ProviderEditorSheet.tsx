@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/lib/store";
@@ -114,7 +114,7 @@ export function ProviderEditorSheet({ open, onOpenChange, editingProfile, select
 	const [jsonError, setJsonError] = useState<string | null>(null);
 
 	const form = useForm<FormValues>({
-		resolver: zodResolver(formSchema),
+		resolver: zodResolver(formSchema) as Resolver<FormValues, any, FormValues>,
 		defaultValues: {
 			name: "",
 			enabled: true,
