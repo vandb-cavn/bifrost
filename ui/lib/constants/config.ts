@@ -111,6 +111,7 @@ export const PROVIDER_SUPPORTED_REQUESTS: Record<BaseProvider, string[]> = {
 		"chat_completion_stream",
 		"responses",
 		"responses_stream",
+		"search",
 		"embedding",
 		"speech",
 		"speech_stream",

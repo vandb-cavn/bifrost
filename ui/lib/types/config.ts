@@ -208,6 +208,7 @@ export type RequestType =
 	| "chat_completion_stream"
 	| "responses"
 	| "responses_stream"
+	| "search"
 	| "embedding"
 	| "rerank"
 	| "speech"
