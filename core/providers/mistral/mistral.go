@@ -256,6 +256,11 @@ func (provider *MistralProvider) Rerank(ctx *schemas.BifrostContext, key schemas
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.RerankRequest, provider.GetProviderKey())
 }
 
+// Search is not supported by the Mistral provider.
+func (provider *MistralProvider) Search(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostSearchRequest) (*schemas.BifrostSearchResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.SearchRequest, provider.GetProviderKey())
+}
+
 // OCR performs an OCR request to the Mistral API.
 // It sends a JSON request to Mistral's OCR endpoint and returns the extracted content.
 func (provider *MistralProvider) OCR(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostOCRRequest) (*schemas.BifrostOCRResponse, *schemas.BifrostError) {

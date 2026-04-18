@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"slices"
 	"sort"
@@ -936,6 +937,48 @@ func (bifrost *Bifrost) EmbeddingRequest(ctx *schemas.BifrostContext, req *schem
 	}
 	// TODO: Release the response
 	return response.EmbeddingResponse, nil
+}
+
+// SearchRequest sends a search request to the specified provider.
+func (bifrost *Bifrost) SearchRequest(ctx *schemas.BifrostContext, req *schemas.BifrostSearchRequest) (*schemas.BifrostSearchResponse, *schemas.BifrostError) {
+	if req == nil {
+		return nil, &schemas.BifrostError{
+			IsBifrostError: false,
+			Error: &schemas.ErrorField{
+				Message: "search request is nil",
+			},
+			ExtraFields: schemas.BifrostErrorExtraFields{
+				RequestType: schemas.SearchRequest,
+			},
+		}
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		return nil, &schemas.BifrostError{
+			IsBifrostError: false,
+			Error: &schemas.ErrorField{
+				Message: "query not provided for search request",
+			},
+			ExtraFields: schemas.BifrostErrorExtraFields{
+				RequestType:            schemas.SearchRequest,
+				Provider:               req.Provider,
+				OriginalModelRequested: req.Model,
+				ResolvedModelUsed:      req.Model,
+			},
+		}
+	}
+	if req.Model == "" {
+		req.Model = "default"
+	}
+
+	bifrostReq := bifrost.getBifrostRequest()
+	bifrostReq.RequestType = schemas.SearchRequest
+	bifrostReq.SearchRequest = req
+
+	response, err := bifrost.handleRequest(ctx, bifrostReq)
+	if err != nil {
+		return nil, err
+	}
+	return response.SearchResponse, nil
 }
 
 // RerankRequest sends a rerank request to the specified provider.
@@ -4253,6 +4296,19 @@ func (bifrost *Bifrost) prepareFallbackRequest(req *schemas.BifrostRequest, fall
 		tmp.Model = fallback.Model
 		fallbackReq.EmbeddingRequest = &tmp
 	}
+	if req.SearchRequest != nil {
+		tmp := *req.SearchRequest
+		if req.SearchRequest.Params != nil {
+			params := *req.SearchRequest.Params
+			if params.ExtraParams != nil {
+				params.ExtraParams = maps.Clone(params.ExtraParams)
+			}
+			tmp.Params = &params
+		}
+		tmp.Provider = fallback.Provider
+		tmp.Model = fallback.Model
+		fallbackReq.SearchRequest = &tmp
+	}
 	if req.RerankRequest != nil {
 		tmp := *req.RerankRequest
 		tmp.Provider = fallback.Provider
@@ -5392,6 +5448,12 @@ func (bifrost *Bifrost) handleProviderRequest(provider schemas.Provider, config 
 			return nil, bifrostError
 		}
 		response.EmbeddingResponse = embeddingResponse
+	case schemas.SearchRequest:
+		searchResponse, bifrostError := provider.Search(req.Context, key, req.BifrostRequest.SearchRequest)
+		if bifrostError != nil {
+			return nil, bifrostError
+		}
+		response.SearchResponse = searchResponse
 	case schemas.RerankRequest:
 		rerankResponse, bifrostError := provider.Rerank(req.Context, key, req.BifrostRequest.RerankRequest)
 		if bifrostError != nil {

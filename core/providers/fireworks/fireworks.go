@@ -76,7 +76,6 @@ func (provider *FireworksProvider) ListModels(ctx *schemas.BifrostContext, keys 
 	)
 }
 
-
 // TextCompletion performs a text completion request to the Fireworks AI API.
 func (provider *FireworksProvider) TextCompletion(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostTextCompletionRequest) (*schemas.BifrostTextCompletionResponse, *schemas.BifrostError) {
 	return openai.HandleOpenAITextCompletionRequest(
@@ -235,6 +234,11 @@ func (provider *FireworksProvider) Speech(ctx *schemas.BifrostContext, key schem
 // Rerank is not supported by the Fireworks AI provider.
 func (provider *FireworksProvider) Rerank(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostRerankRequest) (*schemas.BifrostRerankResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.RerankRequest, provider.GetProviderKey())
+}
+
+// Search is not supported by the Fireworks AI provider.
+func (provider *FireworksProvider) Search(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostSearchRequest) (*schemas.BifrostSearchResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.SearchRequest, provider.GetProviderKey())
 }
 
 // OCR is not supported by the Fireworks provider.

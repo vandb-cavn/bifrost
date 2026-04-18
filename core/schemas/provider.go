@@ -511,6 +511,8 @@ type Provider interface {
 	Responses(ctx *BifrostContext, key Key, request *BifrostResponsesRequest) (*BifrostResponsesResponse, *BifrostError)
 	// ResponsesStream performs a completion request using the Responses API stream (uses chat completion stream request internally for non-openai providers)
 	ResponsesStream(ctx *BifrostContext, postHookRunner PostHookRunner, key Key, request *BifrostResponsesRequest) (chan *BifrostStreamChunk, *BifrostError)
+	// Search performs a search request across external search providers
+	Search(ctx *BifrostContext, key Key, request *BifrostSearchRequest) (*BifrostSearchResponse, *BifrostError)
 	// CountTokens performs a count tokens request
 	CountTokens(ctx *BifrostContext, key Key, request *BifrostResponsesRequest) (*BifrostCountTokensResponse, *BifrostError)
 	// Embedding performs an embedding request
