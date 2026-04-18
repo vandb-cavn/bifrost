@@ -51,6 +51,7 @@ export const RequestTypes = [
 	"image_edit",
 	"image_edit_stream",
 	"image_variation",
+	"search",
 	"video_generation",
 	"video_retrieve",
 	"video_download",
