@@ -952,6 +952,11 @@ func (bifrost *Bifrost) SearchRequest(ctx *schemas.BifrostContext, req *schemas.
 			},
 		}
 	}
+	originalModelRequested := req.Model
+	resolvedModelUsed := originalModelRequested
+	if strings.TrimSpace(resolvedModelUsed) == "" {
+		resolvedModelUsed = "default"
+	}
 	if strings.TrimSpace(req.Query) == "" {
 		return nil, &schemas.BifrostError{
 			IsBifrostError: false,
@@ -961,14 +966,12 @@ func (bifrost *Bifrost) SearchRequest(ctx *schemas.BifrostContext, req *schemas.
 			ExtraFields: schemas.BifrostErrorExtraFields{
 				RequestType:            schemas.SearchRequest,
 				Provider:               req.Provider,
-				OriginalModelRequested: req.Model,
-				ResolvedModelUsed:      req.Model,
+				OriginalModelRequested: originalModelRequested,
+				ResolvedModelUsed:      resolvedModelUsed,
 			},
 		}
 	}
-	if strings.TrimSpace(req.Model) == "" {
-		req.Model = "default"
-	}
+	req.Model = resolvedModelUsed
 
 	bifrostReq := bifrost.getBifrostRequest()
 	bifrostReq.RequestType = schemas.SearchRequest

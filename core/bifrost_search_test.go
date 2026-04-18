@@ -30,7 +30,7 @@ func TestSearchRequestValidation(t *testing.T) {
 	t.Run("BlankQuery", func(t *testing.T) {
 		req := &schemas.BifrostSearchRequest{
 			Provider: schemas.Tavily,
-			Model:    "",
+			Model:    "   ",
 			Query:    "   ",
 		}
 
@@ -50,10 +50,10 @@ func TestSearchRequestValidation(t *testing.T) {
 		if err.ExtraFields.Provider != schemas.Tavily {
 			t.Fatalf("provider = %q", err.ExtraFields.Provider)
 		}
-		if err.ExtraFields.OriginalModelRequested != "" {
+		if err.ExtraFields.OriginalModelRequested != "   " {
 			t.Fatalf("original model = %q", err.ExtraFields.OriginalModelRequested)
 		}
-		if err.ExtraFields.ResolvedModelUsed != "" {
+		if err.ExtraFields.ResolvedModelUsed != "default" {
 			t.Fatalf("resolved model = %q", err.ExtraFields.ResolvedModelUsed)
 		}
 	})
@@ -98,6 +98,9 @@ func TestSearchRequestValidation(t *testing.T) {
 		}
 		if searchErr.ExtraFields.ResolvedModelUsed != "default" {
 			t.Fatalf("resolved model = %q", searchErr.ExtraFields.ResolvedModelUsed)
+		}
+		if req.Model != "default" {
+			t.Fatalf("request model = %q", req.Model)
 		}
 	})
 }
