@@ -66,6 +66,16 @@ func TestBifrostResponseSearchExtraFields(t *testing.T) {
 }
 
 func TestAllowedRequestsSearchOperation(t *testing.T) {
+	var nilAllowed *AllowedRequests
+	if !nilAllowed.IsOperationAllowed(SearchRequest) {
+		t.Fatal("expected nil allowlist to allow search requests")
+	}
+
+	allowlist := &AllowedRequests{}
+	if allowlist.IsOperationAllowed(SearchRequest) {
+		t.Fatal("expected search requests to be disallowed by default")
+	}
+
 	allowed := &AllowedRequests{Search: true}
 
 	if !allowed.IsOperationAllowed(SearchRequest) {
