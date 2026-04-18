@@ -966,7 +966,7 @@ func (bifrost *Bifrost) SearchRequest(ctx *schemas.BifrostContext, req *schemas.
 			},
 		}
 	}
-	if req.Model == "" {
+	if strings.TrimSpace(req.Model) == "" {
 		req.Model = "default"
 	}
 
