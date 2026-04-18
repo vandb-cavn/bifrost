@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useValidateGuardrailRuleMutation } from "@/lib/store/apis/guardrailsApi";
 import { CheckCircle, Copy, Loader2, Plus, X, XCircle } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { QueryBuilder } from "react-querybuilder";
 import { toast } from "sonner";
@@ -211,6 +211,12 @@ const QUERY_BUILDER_CSS = `
 .guardrails-query-builder .queryBuilder-branches .ruleGroup-body { padding-left: 1rem; }
 `;
 
+const QUERY_BUILDER_CLASSNAMES = { queryBuilder: "queryBuilder-branches" };
+const QUERY_BUILDER_TRANSLATIONS = {
+	addRule: { label: "Add rule" },
+	addGroup: { label: "Add group" },
+};
+
 function QueryBuilderSurface({ children }: { children: ReactNode }) {
 	return (
 		<div className="guardrails-query-builder">
@@ -233,6 +239,24 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 	const lastSyncedValueRef = useRef(value);
 	const lastSyncedApplyToRef = useRef(applyTo);
 	const builderFields = useMemo(() => getGuardrailBuilderFields(applyTo), [applyTo]);
+	const allowedFieldNames = useMemo(() => builderFields.map((f) => f.name), [builderFields]);
+	const fieldSelector = useCallback(
+		(props: any) => <BuilderFieldSelector {...props} allowedFieldNames={allowedFieldNames} />,
+		[allowedFieldNames],
+	);
+	const controlElements = useMemo(
+		() => ({
+			fieldSelector,
+			operatorSelector: BuilderOperatorSelector,
+			valueEditor: BuilderValueEditor,
+			addRuleAction: BuilderActionButton,
+			addGroupAction: BuilderActionButton,
+			removeRuleAction: BuilderActionButton,
+			removeGroupAction: BuilderActionButton,
+			combinatorSelector: BuilderCombinatorSelector,
+		}),
+		[fieldSelector],
+	);
 
 	const validationSample = useMemo(() => getGuardrailBuilderSample(applyTo), [applyTo]);
 	const builderExpression = useMemo(() => serializeGuardrailQuery(builderQuery), [builderQuery]);
@@ -384,23 +408,9 @@ export function RuleBuilder({ value, onChange, applyTo }: RuleBuilderProps) {
 									query={builderQuery}
 									onQueryChange={handleBuilderChange}
 									operators={builderOperators}
-									controlClassnames={{ queryBuilder: "queryBuilder-branches" }}
-									controlElements={{
-										fieldSelector: (props: any) => (
-											<BuilderFieldSelector {...props} allowedFieldNames={builderFields.map((field) => field.name)} />
-										),
-										operatorSelector: BuilderOperatorSelector,
-										valueEditor: BuilderValueEditor,
-										addRuleAction: BuilderActionButton,
-										addGroupAction: BuilderActionButton,
-										removeRuleAction: BuilderActionButton,
-										removeGroupAction: BuilderActionButton,
-										combinatorSelector: BuilderCombinatorSelector,
-									}}
-									translations={{
-										addRule: { label: "Add rule" },
-										addGroup: { label: "Add group" },
-									}}
+									controlClassnames={QUERY_BUILDER_CLASSNAMES}
+									controlElements={controlElements}
+									translations={QUERY_BUILDER_TRANSLATIONS}
 								/>
 							</QueryBuilderSurface>
 						</div>
