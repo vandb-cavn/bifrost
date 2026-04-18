@@ -618,7 +618,14 @@ func (s *BifrostHTTPServer) ReloadProvider(ctx context.Context, provider schemas
 		if errors.Is(inMemErr, lib.ErrNotFound) {
 			// Provider is new on this node — add it
 			if addErr := s.Config.AddProvider(skipCtx, provider, *dbProviderConfig); addErr != nil {
-				logger.Warn("ReloadProvider: failed to add new provider %s to memory: %v", provider, addErr)
+				if errors.Is(addErr, lib.ErrAlreadyExists) {
+					// Race: another goroutine added it between the check and AddProvider
+					if updateErr := s.Config.UpdateProviderConfig(skipCtx, provider, *dbProviderConfig); updateErr != nil {
+						logger.Warn("ReloadProvider: failed to sync provider config to memory for %s: %v", provider, updateErr)
+					}
+				} else {
+					logger.Warn("ReloadProvider: failed to add new provider %s to memory: %v", provider, addErr)
+				}
 			}
 		} else {
 			// Provider already in memory — update keys/config
@@ -723,15 +730,12 @@ func (s *BifrostHTTPServer) RemoveProvider(ctx context.Context, provider schemas
 		logger.Error("failed to remove provider from config: %v. Client and config may be out of sync, please restart bifrost", err)
 		return fmt.Errorf("failed to remove provider from config: %w. Client and config may be out of sync, please restart bifrost", err)
 	}
-	governancePlugin, err := s.getGovernancePlugin()
-	if err != nil {
-		return err
+	if governancePlugin, govErr := s.getGovernancePlugin(); govErr == nil {
+		governancePlugin.GetGovernanceStore().DeleteProviderInMemory(string(provider))
 	}
-	governancePlugin.GetGovernanceStore().DeleteProviderInMemory(string(provider))
-	if s.Config == nil || s.Config.ModelCatalog == nil {
-		return fmt.Errorf("pricing manager not found")
+	if s.Config != nil && s.Config.ModelCatalog != nil {
+		s.Config.ModelCatalog.DeleteModelDataForProvider(provider)
 	}
-	s.Config.ModelCatalog.DeleteModelDataForProvider(provider)
 
 	return nil
 }
@@ -901,12 +905,11 @@ func (s *BifrostHTTPServer) FullReload(ctx context.Context) error {
 				logger.Warn("FullReload: provider %s reload failed: %v", p.Name, err)
 			}
 		}
-		if govOK {
-			for _, mp := range inMemProviders {
-				if !dbProviderSet[mp] {
-					if err := s.RemoveProvider(ctx, mp); err != nil {
-						logger.Warn("FullReload: RemoveProvider %s failed: %v", mp, err)
-					}
+		skipCtx := context.WithValue(ctx, schemas.BifrostContextKeySkipDBUpdate, true)
+		for _, mp := range inMemProviders {
+			if !dbProviderSet[mp] {
+				if err := s.RemoveProvider(skipCtx, mp); err != nil {
+					logger.Warn("FullReload: RemoveProvider %s failed: %v", mp, err)
 				}
 			}
 		}
@@ -1216,7 +1219,8 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		}
 	case "provider":
 		if event.Action == "delete" {
-			_ = s.RemoveProvider(ctx, schemas.ModelProvider(event.ID))
+			skipCtx := context.WithValue(ctx, schemas.BifrostContextKeySkipDBUpdate, true)
+			_ = s.RemoveProvider(skipCtx, schemas.ModelProvider(event.ID))
 		} else {
 			_, _ = s.ReloadProvider(ctx, schemas.ModelProvider(event.ID))
 		}
