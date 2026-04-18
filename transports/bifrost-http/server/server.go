@@ -608,7 +608,19 @@ func (s *BifrostHTTPServer) ReloadProvider(ctx context.Context, provider schemas
 		}
 	}
 
-	// Read current key count from in-memory store (providerInfo.Keys is not preloaded from DB)
+	// Sync provider keys from DB into in-memory Config.Providers so that the Bifrost client
+	// (which reads keys via Account.GetKeysForProvider → Config.Providers) sees any keys
+	// added/updated/deleted on a peer node. GetProvider does not preload keys, so we fetch
+	// the full ProviderConfig here and apply it with skipDBUpdate to avoid a redundant write.
+	if dbProviderConfig, err := s.Config.ConfigStore.GetProviderConfig(ctx, provider); err == nil && dbProviderConfig != nil {
+		skipCtx := context.WithValue(ctx, schemas.BifrostContextKeySkipDBUpdate, true)
+		if updateErr := s.Config.UpdateProviderConfig(skipCtx, provider, *dbProviderConfig); updateErr != nil {
+			logger.Warn("ReloadProvider: failed to sync provider config to memory for %s: %v", provider, updateErr)
+		}
+	} else if err != nil {
+		logger.Warn("ReloadProvider: failed to fetch provider config from DB for %s: %v", provider, err)
+	}
+
 	inMemoryKeys, _ := s.Config.GetProviderKeysRaw(provider)
 	isKeylessProvider := providerInfo.CustomProviderConfig != nil && providerInfo.CustomProviderConfig.IsKeyLess
 	hasNoKeys := len(inMemoryKeys) == 0 && !isKeylessProvider
