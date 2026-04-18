@@ -6,6 +6,8 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
+	"github.com/maximhq/bifrost/framework/logstore"
+	"github.com/maximhq/bifrost/framework/vectorstore"
 	"gorm.io/gorm"
 )
 
@@ -536,6 +538,22 @@ func (pcs *PublishingConfigStore) UpdateBudgets(ctx context.Context, bs []*table
 func (pcs *PublishingConfigStore) DeleteBudget(ctx context.Context, id string, tx ...*gorm.DB) error {
 	ctx = ctxForTxnWrite(ctx, tx)
 	if err := pcs.ConfigStore.DeleteBudget(ctx, id, tx...); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateVectorStoreConfig(ctx context.Context, config *vectorstore.Config) error {
+	if err := pcs.ConfigStore.UpdateVectorStoreConfig(ctx, config); err != nil {
+		return err
+	}
+	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	return nil
+}
+
+func (pcs *PublishingConfigStore) UpdateLogsStoreConfig(ctx context.Context, config *logstore.Config) error {
+	if err := pcs.ConfigStore.UpdateLogsStoreConfig(ctx, config); err != nil {
 		return err
 	}
 	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
