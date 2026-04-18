@@ -74,6 +74,7 @@ func (s *BifrostHTTPServer) handleCreateGuardrailRule(ctx *fasthttp.RequestCtx) 
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.syncGuardrailRuleToPlugin(rule.ID)
 	handlers.SendJSONWithStatus(ctx, rule, http.StatusCreated)
 }
 
@@ -91,6 +92,7 @@ func (s *BifrostHTTPServer) handleUpdateGuardrailRule(ctx *fasthttp.RequestCtx) 
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.syncGuardrailRuleToPlugin(rule.ID)
 	handlers.SendJSONWithStatus(ctx, rule, http.StatusOK)
 }
 
@@ -99,6 +101,9 @@ func (s *BifrostHTTPServer) handleDeleteGuardrailRule(ctx *fasthttp.RequestCtx) 
 	if err := s.Config.ConfigStore.DeleteGuardrailRule(context.Background(), id); err != nil {
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if gp, err := s.getGuardrailsPlugin(); err == nil {
+		gp.DeleteRule(id)
 	}
 	ctx.SetStatusCode(http.StatusNoContent)
 }
@@ -197,6 +202,9 @@ func (s *BifrostHTTPServer) handleCreateGuardrailProfile(ctx *fasthttp.RequestCt
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if gp, gErr := s.getGuardrailsPlugin(); gErr == nil {
+		gp.UpsertProfile(created)
+	}
 	resp, err := toGuardrailProfileResponse(created)
 	if err != nil {
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
@@ -246,6 +254,9 @@ func (s *BifrostHTTPServer) handleUpdateGuardrailProfile(ctx *fasthttp.RequestCt
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if gp, gErr := s.getGuardrailsPlugin(); gErr == nil {
+		gp.UpsertProfile(updated)
+	}
 	resp, err := toGuardrailProfileResponse(updated)
 	if err != nil {
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
@@ -260,6 +271,9 @@ func (s *BifrostHTTPServer) handleDeleteGuardrailProfile(ctx *fasthttp.RequestCt
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if gp, err := s.getGuardrailsPlugin(); err == nil {
+		gp.DeleteProfile(id)
+	}
 	ctx.SetStatusCode(http.StatusNoContent)
 }
 
@@ -270,6 +284,7 @@ func (s *BifrostHTTPServer) handleLinkGuardrailProfile(ctx *fasthttp.RequestCtx)
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.syncGuardrailRuleToPlugin(ruleID)
 	ctx.SetStatusCode(http.StatusNoContent)
 }
 
@@ -280,6 +295,7 @@ func (s *BifrostHTTPServer) handleUnlinkGuardrailProfile(ctx *fasthttp.RequestCt
 		handlers.SendError(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.syncGuardrailRuleToPlugin(ruleID)
 	ctx.SetStatusCode(http.StatusNoContent)
 }
 
@@ -326,6 +342,35 @@ func (s *BifrostHTTPServer) handleValidateGuardrailRule(ctx *fasthttp.RequestCtx
 	}
 
 	handlers.SendJSONWithStatus(ctx, validateRuleResponse{Valid: true, Result: &result}, http.StatusOK)
+}
+
+// syncGuardrailRuleToPlugin re-fetches the rule from DB and upserts it into the plugin cache.
+// This ensures the originating node (which skips its own cluster-sync events) stays up-to-date.
+func (s *BifrostHTTPServer) syncGuardrailRuleToPlugin(id string) {
+	gp, err := s.getGuardrailsPlugin()
+	if err != nil {
+		return
+	}
+	rule, err := s.Config.ConfigStore.GetGuardrailRuleByID(context.Background(), id)
+	if err != nil {
+		logger.Warn("guardrails: sync rule %s to plugin failed: %v", id, err)
+		return
+	}
+	gp.UpsertRule(rule)
+}
+
+// syncGuardrailProfileToPlugin re-fetches the profile from DB and upserts it into the plugin cache.
+func (s *BifrostHTTPServer) syncGuardrailProfileToPlugin(id string) {
+	gp, err := s.getGuardrailsPlugin()
+	if err != nil {
+		return
+	}
+	profile, err := s.Config.ConfigStore.GetGuardrailProfileByID(context.Background(), id)
+	if err != nil {
+		logger.Warn("guardrails: sync profile %s to plugin failed: %v", id, err)
+		return
+	}
+	gp.UpsertProfile(profile)
 }
 
 func (s *BifrostHTTPServer) getGuardrailsPlugin() (*guardrailsplugin.GuardrailsPlugin, error) {
