@@ -77,12 +77,14 @@ func TestSearchRequestValidation(t *testing.T) {
 			Query:    "bifrost search",
 		}
 
+		// OpenAI and the current providers still return unsupported Search; this test only
+		// verifies req.Model is normalized to "default" before dispatch reaches the provider.
 		resp, searchErr := bifrost.SearchRequest(nil, req)
 		if resp != nil {
 			t.Fatalf("resp = %#v, want nil", resp)
 		}
 		if searchErr == nil {
-			t.Fatal("expected error")
+			t.Fatal("expected unsupported search error after model normalization")
 		}
 		if searchErr.Error == nil || searchErr.Error.Message == "" {
 			t.Fatalf("error = %+v", searchErr.Error)
