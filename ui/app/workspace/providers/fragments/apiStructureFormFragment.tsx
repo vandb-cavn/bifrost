@@ -45,6 +45,7 @@ export function ApiStructureFormFragment({ provider }: Props) {
 				chat_completion_stream: provider.custom_provider_config?.allowed_requests?.chat_completion_stream ?? true,
 				responses: provider.custom_provider_config?.allowed_requests?.responses ?? true,
 				responses_stream: provider.custom_provider_config?.allowed_requests?.responses_stream ?? true,
+				search: provider.custom_provider_config?.allowed_requests?.search ?? true,
 				embedding: provider.custom_provider_config?.allowed_requests?.embedding ?? true,
 				speech: provider.custom_provider_config?.allowed_requests?.speech ?? true,
 				speech_stream: provider.custom_provider_config?.allowed_requests?.speech_stream ?? true,

@@ -51,6 +51,7 @@ export function AddCustomProviderSheetContent({ show = true, onClose, onSave }: 
 				chat_completion_stream: true,
 				responses: true,
 				responses_stream: true,
+				search: true,
 				embedding: true,
 				speech: true,
 				speech_stream: true,

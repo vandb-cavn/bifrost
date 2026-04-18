@@ -72,6 +72,7 @@ const RequestTypes: Array<{ key: RequestType; label: string }> = [
 	{ key: "chat_completion_stream", label: "Chat Completion Stream" },
 	{ key: "responses", label: "Responses" },
 	{ key: "responses_stream", label: "Responses Stream" },
+	{ key: "search", label: "Search" },
 	{ key: "embedding", label: "Embedding" },
 	{ key: "speech", label: "Speech" },
 	{ key: "speech_stream", label: "Speech Stream" },

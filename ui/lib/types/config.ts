@@ -257,6 +257,7 @@ export interface AllowedRequests {
 	chat_completion_stream: boolean;
 	responses: boolean;
 	responses_stream: boolean;
+	search: boolean;
 	embedding: boolean;
 	speech: boolean;
 	speech_stream: boolean;
