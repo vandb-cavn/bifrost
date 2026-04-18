@@ -23,8 +23,12 @@
   
   # Set environment for CGO-enabled build (required for go-sqlite3)
   ENV CGO_ENABLED=1 GOOS=linux
+  # Disable Go workspace mode so go mod download uses only go.mod replace directives,
+  # not go.work (which maps local modules to paths that don't match the Docker layout).
+  ENV GOWORK=off
 
-  # go.mod uses replace ../core, ../framework, ../plugins/governance (paths relative to this go.mod in /app).
+  # go.mod uses replace ../core, ../framework, ../plugins/governance, ../plugins/guardrails
+  # (paths relative to this go.mod at /app, so they resolve to /core, /framework, etc.)
   COPY core /core
   COPY framework /framework
   COPY plugins/governance /plugins/governance
@@ -35,11 +39,10 @@
 
   # Copy source code and dependencies
   COPY transports/ ./
-  
+
   COPY --from=ui-builder /app/out ./bifrost-http/ui
-  
+
   # Build the binary with CGO enabled and static SQLite linking
-  ENV GOWORK=off
   ARG VERSION=unknown
   RUN go build \
     -ldflags="-w -s -X main.Version=v${VERSION} -extldflags '-static'" \
