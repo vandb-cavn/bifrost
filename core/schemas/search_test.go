@@ -64,3 +64,11 @@ func TestBifrostResponseSearchExtraFields(t *testing.T) {
 		t.Fatalf("model fields = %+v", extra)
 	}
 }
+
+func TestAllowedRequestsSearchOperation(t *testing.T) {
+	allowed := &AllowedRequests{Search: true}
+
+	if !allowed.IsOperationAllowed(SearchRequest) {
+		t.Fatal("expected search requests to be allowed")
+	}
+}

@@ -244,6 +244,7 @@ type AllowedRequests struct {
 	ChatCompletionStream  bool `json:"chat_completion_stream"`
 	Responses             bool `json:"responses"`
 	ResponsesStream       bool `json:"responses_stream"`
+	Search                bool `json:"search"`
 	CountTokens           bool `json:"count_tokens"`
 	Embedding             bool `json:"embedding"`
 	Rerank                bool `json:"rerank"`
@@ -310,6 +311,8 @@ func (ar *AllowedRequests) IsOperationAllowed(operation RequestType) bool {
 		return ar.Responses
 	case ResponsesStreamRequest:
 		return ar.ResponsesStream
+	case SearchRequest:
+		return ar.Search
 	case CountTokensRequest:
 		return ar.CountTokens
 	case EmbeddingRequest:

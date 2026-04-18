@@ -635,6 +635,19 @@ func TestRetryableStatusCodes(t *testing.T) {
 	}
 }
 
+func TestResetBifrostRequestClearsSearchRequest(t *testing.T) {
+	req := &schemas.BifrostRequest{
+		RequestType:   schemas.SearchRequest,
+		SearchRequest: &schemas.BifrostSearchRequest{Query: "bifrost"},
+	}
+
+	resetBifrostRequest(req)
+
+	if req.SearchRequest != nil {
+		t.Fatalf("SearchRequest = %#v, want nil", req.SearchRequest)
+	}
+}
+
 // Benchmark calculateBackoff performance
 func BenchmarkCalculateBackoff(b *testing.B) {
 	config := createTestConfig(10, 100*time.Millisecond, 5*time.Second)

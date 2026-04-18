@@ -6279,6 +6279,7 @@ func resetBifrostRequest(req *schemas.BifrostRequest) {
 	req.TextCompletionRequest = nil
 	req.ChatRequest = nil
 	req.ResponsesRequest = nil
+	req.SearchRequest = nil
 	req.CountTokensRequest = nil
 	req.EmbeddingRequest = nil
 	req.RerankRequest = nil
