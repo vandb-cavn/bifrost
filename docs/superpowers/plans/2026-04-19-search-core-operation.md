@@ -1463,11 +1463,14 @@ Implemented behavior note:
 
 ### Task 8: HTTP `/v1/search` Transport
 
+**Status:** Completed
+**Commit:** `082f5a079` `feat(search): add http search endpoint`
+
 **Files:**
 - Modify: `transports/bifrost-http/handlers/inference.go`
 - Test: `transports/bifrost-http/handlers/inference_search_test.go`
 
-- [ ] **Step 1: Write parser tests**
+- [x] **Step 1: Write parser tests**
 
 Create `transports/bifrost-http/handlers/inference_search_test.go`:
 
@@ -1490,7 +1493,7 @@ func TestPrepareSearchRequest(t *testing.T) {
 		"query":"bifrost gateway",
 		"max_results":5,
 		"include_answer":true,
-		"fallbacks":[{"model":"brave/default"}],
+		"fallbacks":["brave/default"],
 		"search_depth":"advanced"
 	}`))
 
@@ -1528,7 +1531,7 @@ func TestPrepareSearchRequestMissingQuery(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Add handler request type and params map**
+- [x] **Step 2: Add handler request type and params map**
 
 Modify `transports/bifrost-http/handlers/inference.go`:
 
@@ -1564,7 +1567,7 @@ Add route:
 r.POST("/v1/search", lib.ChainMiddlewares(h.search, baseMiddlewares...))
 ```
 
-- [ ] **Step 3: Implement parser and handler**
+- [x] **Step 3: Implement parser and handler**
 
 Add parser near `prepareRerankRequest`:
 
@@ -1633,7 +1636,7 @@ func (h *CompletionHandler) search(ctx *fasthttp.RequestCtx) {
 }
 ```
 
-- [ ] **Step 4: Run transport parser tests**
+- [x] **Step 4: Run transport parser tests**
 
 Run:
 
@@ -1643,12 +1646,17 @@ go test ./transports/bifrost-http/handlers -run TestPrepareSearchRequest -count=
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add transports/bifrost-http/handlers/inference.go transports/bifrost-http/handlers/inference_search_test.go
 git commit -m "feat(search): add http search endpoint"
 ```
+
+Implemented behavior note:
+- `/v1/search` now routes through the same Bifrost search pipeline as the other first-class operations.
+- The HTTP body uses the existing `provider/model` fallback contract, with `search_depth` and other unknown fields preserved in `ExtraParams`.
+- Validation passed with `go test ./transports/bifrost-http/handlers -run 'Test(PrepareSearchRequest|PrepareSearchRequestMissingQuery|SearchPathMapping)' -count=1` and `go test ./transports/bifrost-http/handlers -count=1`.
 
 ---
 
