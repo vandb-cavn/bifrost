@@ -56,6 +56,22 @@ func TestPrepareSearchRequestMissingQuery(t *testing.T) {
 	}
 }
 
+func TestPrepareSearchRequestRejectsStream(t *testing.T) {
+	var ctx fasthttp.RequestCtx
+	ctx.Request.SetRequestURI("/v1/search")
+	ctx.Request.Header.SetMethod(fasthttp.MethodPost)
+	ctx.Request.SetBody([]byte(`{
+		"model":"tavily/default",
+		"query":"bifrost gateway",
+		"stream":true
+	}`))
+
+	_, _, err := prepareSearchRequest(&ctx)
+	if err == nil || err.Error() != "stream is not supported for search" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSearchPathMapping(t *testing.T) {
 	if got := PathToTypeMapping["/v1/search"]; got != schemas.SearchRequest {
 		t.Fatalf("path mapping = %q, want %q", got, schemas.SearchRequest)

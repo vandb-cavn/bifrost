@@ -21,7 +21,11 @@ func TestToExaSearchRequest(t *testing.T) {
 			Country:           &country,
 			IncludeRawContent: &includeRaw,
 			ExtraParams: map[string]interface{}{
-				"type": "neural",
+				"type":         "neural",
+				"numResults":   20,
+				"userLocation": "CA",
+				"stream":       true,
+				"passthrough":  "ok",
 			},
 		},
 	})
@@ -38,8 +42,49 @@ func TestToExaSearchRequest(t *testing.T) {
 	if req.Type == nil || *req.Type != "neural" {
 		t.Fatalf("type = %+v", req.Type)
 	}
+	if req.NumResults == nil || *req.NumResults != 3 {
+		t.Fatalf("numResults = %+v", req.NumResults)
+	}
 	if req.Contents == nil || req.Contents.Text == nil || !*req.Contents.Text {
 		t.Fatalf("contents = %+v", req.Contents)
+	}
+	if req.Stream != nil {
+		t.Fatalf("stream = %+v", req.Stream)
+	}
+	if _, ok := req.ExtraParams["numResults"]; ok {
+		t.Fatal("expected numResults to be removed from extra params")
+	}
+	if _, ok := req.ExtraParams["userLocation"]; ok {
+		t.Fatal("expected userLocation to be removed from extra params")
+	}
+	if _, ok := req.ExtraParams["stream"]; ok {
+		t.Fatal("expected stream to be removed from extra params")
+	}
+	if passthrough, ok := req.ExtraParams["passthrough"]; !ok || passthrough != "ok" {
+		t.Fatalf("passthrough = %#v, want ok", passthrough)
+	}
+
+	fallback := ToExaSearchRequest(&schemas.BifrostSearchRequest{
+		Query: "fallback",
+		Params: &schemas.BifrostSearchParameters{
+			ExtraParams: map[string]interface{}{
+				"numResults":   11,
+				"userLocation": "GB",
+				"stream":       true,
+			},
+		},
+	})
+	if fallback == nil {
+		t.Fatal("expected non-nil fallback request")
+	}
+	if fallback.NumResults == nil || *fallback.NumResults != 11 {
+		t.Fatalf("fallback numResults = %+v", fallback.NumResults)
+	}
+	if fallback.UserLocation == nil || *fallback.UserLocation != "GB" {
+		t.Fatalf("fallback userLocation = %+v", fallback.UserLocation)
+	}
+	if fallback.Stream != nil {
+		t.Fatalf("fallback stream = %+v", fallback.Stream)
 	}
 }
 
@@ -59,6 +104,9 @@ func TestExaSearchResponseToBifrost(t *testing.T) {
 			Score:         &score,
 			PublishedDate: &published,
 		}},
+		CostDollars: &ExaCostDollars{
+			Total: schemas.Ptr(1.75),
+		},
 	}).ToBifrostSearchResponse("default", "bifrost gateway", true)
 
 	if resp == nil {
@@ -84,6 +132,9 @@ func TestExaSearchResponseToBifrost(t *testing.T) {
 	}
 	if resp.Usage == nil || resp.Usage.Queries != 1 || resp.Usage.Results != 1 {
 		t.Fatalf("usage = %+v", resp.Usage)
+	}
+	if resp.Usage.Credits == nil || *resp.Usage.Credits != 1.75 {
+		t.Fatalf("credits = %+v", resp.Usage.Credits)
 	}
 	if resp.Results[0].Score == nil || *resp.Results[0].Score != score {
 		t.Fatalf("score = %+v", resp.Results[0].Score)

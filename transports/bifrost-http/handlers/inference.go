@@ -1211,6 +1211,9 @@ func prepareSearchRequest(ctx *fasthttp.RequestCtx) (*SearchRequest, *schemas.Bi
 	if err != nil {
 		logger.Warn("Failed to extract extra params: %v", err)
 	} else {
+		if _, ok := extraParams["stream"]; ok {
+			return nil, nil, fmt.Errorf("stream is not supported for search")
+		}
 		req.BifrostSearchParameters.ExtraParams = extraParams
 	}
 

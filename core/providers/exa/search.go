@@ -40,13 +40,17 @@ func ToExaSearchRequest(req *schemas.BifrostSearchRequest) *ExaSearchRequest {
 			result.Category = v
 			delete(extra, "category")
 		}
-		if v, ok := extractStringPtr(extra, "userLocation", "user_location"); ok && result.UserLocation == nil {
-			result.UserLocation = v
+		if v, ok := extractStringPtr(extra, "userLocation", "user_location"); ok {
+			if result.UserLocation == nil {
+				result.UserLocation = v
+			}
 			delete(extra, "userLocation")
 			delete(extra, "user_location")
 		}
 		if v, ok := extractIntPtr(extra, "numResults", "num_results"); ok {
-			result.NumResults = v
+			if result.NumResults == nil {
+				result.NumResults = v
+			}
 			delete(extra, "numResults")
 			delete(extra, "num_results")
 		}
@@ -80,8 +84,7 @@ func ToExaSearchRequest(req *schemas.BifrostSearchRequest) *ExaSearchRequest {
 			delete(extra, "systemPrompt")
 			delete(extra, "system_prompt")
 		}
-		if v, ok := extractBoolPtr(extra, "stream"); ok {
-			result.Stream = v
+		if _, ok := extractBoolPtr(extra, "stream"); ok {
 			delete(extra, "stream")
 		}
 		if v, ok := extractMap(extra, "outputSchema", "output_schema"); ok {
@@ -144,6 +147,9 @@ func (resp *ExaSearchResponse) ToBifrostSearchResponse(model string, query strin
 			Queries: 1,
 			Results: len(results),
 		},
+	}
+	if resp.CostDollars != nil && resp.CostDollars.Total != nil {
+		out.Usage.Credits = resp.CostDollars.Total
 	}
 	return out
 }
