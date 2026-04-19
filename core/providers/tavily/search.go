@@ -29,6 +29,7 @@ func ToTavilySearchRequest(req *schemas.BifrostSearchRequest) *TavilySearchReque
 	result.MaxResults = req.Params.MaxResults
 	result.IncludeAnswer = req.Params.IncludeAnswer
 	result.IncludeRawContent = req.Params.IncludeRawContent
+	result.Country = req.Params.Country
 
 	extra := copyExtraParams(req.Params.ExtraParams)
 	if len(extra) == 0 {
@@ -106,7 +107,9 @@ func ToTavilySearchRequest(req *schemas.BifrostSearchRequest) *TavilySearchReque
 		delete(extra, "includeUsage")
 	}
 	if v, ok := extractStringPtr(extra, "country"); ok {
-		result.Country = v
+		if result.Country == nil {
+			result.Country = v
+		}
 		delete(extra, "country")
 	}
 	if v, ok := extractIntPtr(extra, "days"); ok {
@@ -146,7 +149,7 @@ func (resp *TavilySearchResponse) ToBifrostSearchResponse(model string, includeR
 	}
 
 	response := &schemas.BifrostSearchResponse{
-		Object:  "search_response",
+		Object:  "search",
 		Query:   resp.Query,
 		Results: results,
 		Model:   model,

@@ -14,6 +14,7 @@ func TestToTavilySearchRequest(t *testing.T) {
 		Query: "bifrost ai gateway",
 		Params: &schemas.BifrostSearchParameters{
 			MaxResults:        schemas.Ptr(7),
+			Country:           schemas.Ptr("US"),
 			IncludeAnswer:     schemas.Ptr(true),
 			IncludeRawContent: schemas.Ptr(true),
 			ExtraParams: map[string]interface{}{
@@ -33,6 +34,9 @@ func TestToTavilySearchRequest(t *testing.T) {
 	}
 	if result.MaxResults == nil || *result.MaxResults != 7 {
 		t.Fatalf("max_results = %v, want 7", result.MaxResults)
+	}
+	if result.Country == nil || *result.Country != "US" {
+		t.Fatalf("country = %v, want US", result.Country)
 	}
 	if result.IncludeAnswer == nil || !*result.IncludeAnswer {
 		t.Fatal("expected include_answer to be true")
@@ -86,8 +90,8 @@ func TestTavilySearchResponseToBifrostSearchResponse(t *testing.T) {
 	if bifrostResp == nil {
 		t.Fatal("expected non-nil Bifrost response")
 	}
-	if bifrostResp.Object != "search_response" {
-		t.Fatalf("object = %q, want search_response", bifrostResp.Object)
+	if bifrostResp.Object != "search" {
+		t.Fatalf("object = %q, want search", bifrostResp.Object)
 	}
 	if bifrostResp.Query != response.Query {
 		t.Fatalf("query = %q, want %q", bifrostResp.Query, response.Query)
