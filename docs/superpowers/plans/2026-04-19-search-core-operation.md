@@ -1457,6 +1457,7 @@ git commit -m "feat(search): implement exa provider"
 Implemented behavior note:
 - Exa search now supports `type`, `category`, `userLocation`, `numResults`, domain filters, `contents.text`, and request passthrough for remaining extra params.
 - `IncludeRawContent` maps to `contents.text = true`; response mapping prefers highlights, then summary, then text.
+- Structured params win over `ExtraParams` for `numResults` and `userLocation`; `stream` is rejected at the HTTP layer and `CostDollars.Total` maps to `usage.credits`.
 - Validation passed with `go test ./core/providers/exa -count=1` and `go test ./core/... -run '^$' -count=1`.
 
 ---
@@ -1599,6 +1600,9 @@ func prepareSearchRequest(ctx *fasthttp.RequestCtx) (*SearchRequest, *schemas.Bi
 	}
 	extraParams, err := extractExtraParams(ctx.PostBody(), searchParamsKnownFields)
 	if err == nil {
+		if _, ok := extraParams["stream"]; ok {
+			return nil, nil, fmt.Errorf("stream is not supported for search")
+		}
 		req.BifrostSearchParameters.ExtraParams = extraParams
 	}
 	bifrostReq := &schemas.BifrostSearchRequest{
@@ -1657,128 +1661,36 @@ Implemented behavior note:
 - `/v1/search` now routes through the same Bifrost search pipeline as the other first-class operations.
 - The HTTP body uses the existing `provider/model` fallback contract, with `search_depth` and other unknown fields preserved in `ExtraParams`.
 - Validation passed with `go test ./transports/bifrost-http/handlers -run 'Test(PrepareSearchRequest|PrepareSearchRequestMissingQuery|SearchPathMapping)' -count=1` and `go test ./transports/bifrost-http/handlers -count=1`.
+- `/v1/search` rejects `stream` in the request body so it cannot leak into provider payloads.
 
 ---
 
 ### Task 9: Governance, Logging, and Pricing
 
 **Files:**
-- Modify: `core/schemas/provider.go`
-- Modify: `core/providers/utils/utils.go`
 - Modify: `plugins/logging/main.go`
 - Modify: `plugins/logging/operations.go`
 - Modify: `plugins/logging/utils.go`
-- Modify: `framework/modelcatalog/*.go`
-- Modify: `plugins/telemetry/main.go`
+- Modify: `framework/configstore/tables/modelpricing.go`
+- Modify: `framework/modelcatalog/pricing.go`
+- Modify: `framework/modelcatalog/utils.go`
 - Test: affected plugin/modelcatalog tests
 
-- [ ] **Step 1: Add `AllowedRequests.Search` test**
+- [x] **Step 1: Governance already in place**
 
-Find existing `AllowedRequests` tests and add:
+`AllowedRequests.Search` and its coverage already exist in this branch, so no core schema change was needed.
 
-```go
-func TestAllowedRequestsSearch(t *testing.T) {
-	allowed := &schemas.AllowedRequests{Search: true}
-	if !allowed.IsOperationAllowed(schemas.SearchRequest) {
-		t.Fatalf("search should be allowed")
-	}
-	allowed.Search = false
-	if allowed.IsOperationAllowed(schemas.SearchRequest) {
-		t.Fatalf("search should be denied")
-	}
-}
-```
+- [x] **Step 2: Logging request params and content extraction**
 
-- [ ] **Step 2: Implement `AllowedRequests.Search`**
+- [x] `plugins/logging/main.go` now records `SearchRequest.Params`
+- [x] `plugins/logging/utils.go` now adds the query to input history
+- [x] `plugins/logging/operations.go` now maps the first search snippet to `OutputMessageParsed`
 
-Add field:
+- [x] **Step 3: Add search pricing input**
 
-```go
-Search bool `json:"search,omitempty"`
-```
+Model catalog now understands `search` as a request mode, extracts `SearchResponse.Usage`, and computes search cost from `search_cost_per_request`, `search_cost_per_result`, and `search_cost_per_credit`. A dedicated migration now adds those 3 columns for existing databases.
 
-Add switch case:
-
-```go
-case SearchRequest:
-	return ar.Search
-```
-
-- [ ] **Step 3: Add logging request params and content extraction**
-
-In `plugins/logging/main.go`, add to the pre-hook switch:
-
-```go
-case schemas.SearchRequest:
-	initialData.Params = req.SearchRequest.Params
-```
-
-In `plugins/logging/utils.go`, add search query to input extraction near rerank:
-
-```go
-if request.SearchRequest != nil {
-	query := request.SearchRequest.Query
-	inputHistory = append(inputHistory, schemas.ChatMessage{
-		Role: schemas.ChatMessageRoleUser,
-		Content: &schemas.ChatMessageContent{
-			ContentStr: &query,
-		},
-	})
-}
-```
-
-In `plugins/logging/operations.go`, add response output extraction:
-
-```go
-if result.SearchResponse != nil && len(result.SearchResponse.Results) > 0 {
-	entry.OutputMessageParsed = &schemas.ChatMessage{
-		Role: schemas.ChatMessageRoleAssistant,
-		Content: &schemas.ChatMessageContent{
-			ContentStr: schemas.Ptr(result.SearchResponse.Results[0].Snippet),
-		},
-	}
-}
-```
-
-- [ ] **Step 4: Add search pricing input**
-
-In model catalog cost extraction, add a search branch:
-
-```go
-case resp.SearchResponse != nil && resp.SearchResponse.Usage != nil:
-	return costInput{
-		RequestType: schemas.SearchRequest,
-		Provider:    resp.SearchResponse.ExtraFields.Provider,
-		Model:       resp.SearchResponse.Model,
-		SearchUsage: resp.SearchResponse.Usage,
-	}
-```
-
-Add fields to pricing config structs:
-
-```go
-SearchCostPerRequest float64 `json:"search_cost_per_request,omitempty"`
-SearchCostPerResult  float64 `json:"search_cost_per_result,omitempty"`
-SearchCostPerCredit  float64 `json:"search_cost_per_credit,omitempty"`
-```
-
-Add cost calculation:
-
-```go
-func computeSearchCost(entry PricingEntry, usage *schemas.BifrostSearchUsage) float64 {
-	if usage == nil {
-		return 0
-	}
-	cost := entry.SearchCostPerRequest
-	cost += float64(usage.Results) * entry.SearchCostPerResult
-	if usage.Credits != nil {
-		cost += *usage.Credits * entry.SearchCostPerCredit
-	}
-	return cost
-}
-```
-
-- [ ] **Step 5: Run targeted tests**
+- [x] **Step 4: Run targeted tests**
 
 Run:
 
@@ -1787,12 +1699,12 @@ go test ./plugins/logging -run 'Test.*Search|TestAllowedRequestsSearch' -count=1
 go test ./framework/modelcatalog -run 'Test.*Search|Test.*Cost' -count=1
 ```
 
-Expected: PASS for added tests. If no matching pre-existing package tests exist, add narrow tests in the package where pricing extraction lives.
+Expected: PASS for added tests. Verified with focused package tests plus full package runs for both `plugins/logging` and `framework/modelcatalog`, plus a configstore migration test covering legacy `governance_model_pricing` schemas.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add core/schemas core/providers/utils plugins/logging framework/modelcatalog plugins/telemetry
+git add plugins/logging framework/configstore/tables framework/modelcatalog docs/superpowers/plans/2026-04-19-search-core-operation.md
 git commit -m "feat(search): wire governance logging and pricing"
 ```
 
