@@ -89,10 +89,6 @@ func (provider *TavilyProvider) ResponsesStream(_ *schemas.BifrostContext, _ sch
 	return nil, provider.unsupported(schemas.ResponsesStreamRequest)
 }
 
-func (provider *TavilyProvider) Search(_ *schemas.BifrostContext, _ schemas.Key, _ *schemas.BifrostSearchRequest) (*schemas.BifrostSearchResponse, *schemas.BifrostError) {
-	return nil, provider.unsupported(schemas.SearchRequest)
-}
-
 func (provider *TavilyProvider) CountTokens(_ *schemas.BifrostContext, _ schemas.Key, _ *schemas.BifrostResponsesRequest) (*schemas.BifrostCountTokensResponse, *schemas.BifrostError) {
 	return nil, provider.unsupported(schemas.CountTokensRequest)
 }
