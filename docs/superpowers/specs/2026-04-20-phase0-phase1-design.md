@@ -410,13 +410,15 @@ CREATE TABLE governance_sso_configs (
 
 `client_secret` uses the existing `encrypt` package (same as other secrets in the codebase). `BeforeSave` / `AfterFind` hooks on the GORM model.
 
+**Single-SSO constraint:** at most one row in `governance_sso_configs` may have `enabled = 1` at any time. When `PUT /api/governance/sso/configs/:id` sets `enabled = true`, the handler disables all other configs in the same transaction before enabling the target. `GET /api/sso/login` selects `WHERE enabled = 1 LIMIT 1` — no tie-breaking needed.
+
 ### SSO Config Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/governance/sso/configs` | List all SSO configs |
-| POST | `/api/governance/sso/configs` | Create SSO config |
-| PUT | `/api/governance/sso/configs/:id` | Update config |
+| POST | `/api/governance/sso/configs` | Create SSO config (created with `enabled = false`) |
+| PUT | `/api/governance/sso/configs/:id` | Update config; enabling one disables all others |
 | DELETE | `/api/governance/sso/configs/:id` | Delete config |
 | POST | `/api/governance/sso/configs/:id/test` | Test connection (SSRF-guarded) |
 
