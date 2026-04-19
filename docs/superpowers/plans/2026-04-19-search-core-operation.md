@@ -683,6 +683,9 @@ git commit -m "feat(search): register search providers"
 
 ### Task 5: Tavily Search Implementation
 
+**Status:** Completed
+**Commit:** `09bf20612` `fix(search): align tavily search mapping`
+
 **Files:**
 - Create: `core/providers/tavily/types.go`
 - Create: `core/providers/tavily/search.go`
@@ -690,7 +693,7 @@ git commit -m "feat(search): register search providers"
 - Create: `core/providers/tavily/search_test.go`
 - Modify: `core/providers/tavily/tavily.go`
 
-- [ ] **Step 1: Write converter tests**
+- [x] **Step 1: Write converter tests**
 
 Create `core/providers/tavily/search_test.go`:
 
@@ -766,7 +769,7 @@ func TestTavilySearchResponseToBifrost(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run:
 
@@ -776,7 +779,7 @@ go test ./core/providers/tavily -run 'Test(ToTavily|TavilySearchResponse)' -coun
 
 Expected: FAIL because converter types/functions do not exist.
 
-- [ ] **Step 3: Implement Tavily types and converters**
+- [x] **Step 3: Implement Tavily types and converters**
 
 Create `core/providers/tavily/types.go`:
 
@@ -930,7 +933,7 @@ func (provider *TavilyProvider) Search(ctx *schemas.BifrostContext, key schemas.
 }
 ```
 
-- [ ] **Step 4: Add Tavily error converter**
+- [x] **Step 4: Add Tavily error converter**
 
 Create `core/providers/tavily/errors.go`:
 
@@ -948,7 +951,7 @@ func TavilyErrorConverter(resp *fasthttp.Response, requestType schemas.RequestTy
 }
 ```
 
-- [ ] **Step 5: Run Tavily tests**
+- [x] **Step 5: Run Tavily tests**
 
 Run:
 
@@ -958,16 +961,23 @@ go test ./core/providers/tavily -count=1
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add core/providers/tavily
 git commit -m "feat(search): implement tavily provider"
 ```
 
+Implemented behavior note:
+- Final Tavily mapping uses `object = "search"`, supports structured `country`, and preserves extra Tavily-specific params.
+- Validation passed with `go test ./core/providers/tavily -count=1` and `go test ./core/... -run '^$' -count=1`.
+
 ---
 
 ### Task 6: Brave Search Implementation
+
+**Status:** Completed
+**Commit:** `38dd0b8c0` `feat(search): implement brave provider`
 
 **Files:**
 - Create: `core/providers/brave/types.go`
@@ -975,7 +985,7 @@ git commit -m "feat(search): implement tavily provider"
 - Create: `core/providers/brave/errors.go`
 - Create: `core/providers/brave/search_test.go`
 
-- [ ] **Step 1: Write converter tests**
+- [x] **Step 1: Write converter tests**
 
 Create `core/providers/brave/search_test.go`:
 
@@ -1031,7 +1041,7 @@ func TestBraveSearchResponseToBifrost(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement Brave types and converters**
+- [x] **Step 2: Implement Brave types and converters**
 
 Create `core/providers/brave/types.go`:
 
@@ -1170,7 +1180,7 @@ func BraveErrorConverter(resp *fasthttp.Response, requestType schemas.RequestTyp
 }
 ```
 
-- [ ] **Step 3: Run Brave tests**
+- [x] **Step 3: Run Brave tests**
 
 Run:
 
@@ -1180,12 +1190,16 @@ go test ./core/providers/brave -count=1
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add core/providers/brave
 git commit -m "feat(search): implement brave provider"
 ```
+
+Implemented behavior note:
+- Brave search uses `GET /res/v1/web/search`, maps `count/country/search_lang`, and prefers structured params over `ExtraParams`.
+- Validation passed with `go test ./core/providers/brave -count=1` and `go test ./core/... -run '^$' -count=1`.
 
 ---
 
