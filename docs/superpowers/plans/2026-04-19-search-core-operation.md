@@ -1205,13 +1205,16 @@ Implemented behavior note:
 
 ### Task 7: Exa Search Implementation
 
+**Status:** Completed
+**Commit:** `1370e642b` `feat(search): implement exa provider`
+
 **Files:**
 - Create: `core/providers/exa/types.go`
 - Create: `core/providers/exa/search.go`
 - Create: `core/providers/exa/errors.go`
 - Create: `core/providers/exa/search_test.go`
 
-- [ ] **Step 1: Write converter tests**
+- [x] **Step 1: Write converter tests**
 
 Create `core/providers/exa/search_test.go`:
 
@@ -1274,7 +1277,7 @@ func TestExaSearchResponseToBifrost(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement Exa types and converters**
+- [x] **Step 2: Implement Exa types and converters**
 
 Create `core/providers/exa/types.go`:
 
@@ -1434,7 +1437,7 @@ func ExaErrorConverter(resp *fasthttp.Response, requestType schemas.RequestType,
 }
 ```
 
-- [ ] **Step 3: Run Exa tests**
+- [x] **Step 3: Run Exa tests**
 
 Run:
 
@@ -1444,12 +1447,17 @@ go test ./core/providers/exa -count=1
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add core/providers/exa
 git commit -m "feat(search): implement exa provider"
 ```
+
+Implemented behavior note:
+- Exa search now supports `type`, `category`, `userLocation`, `numResults`, domain filters, `contents.text`, and request passthrough for remaining extra params.
+- `IncludeRawContent` maps to `contents.text = true`; response mapping prefers highlights, then summary, then text.
+- Validation passed with `go test ./core/providers/exa -count=1` and `go test ./core/... -run '^$' -count=1`.
 
 ---
 
