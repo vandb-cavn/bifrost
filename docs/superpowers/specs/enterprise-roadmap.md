@@ -1,6 +1,6 @@
 # Bifrost Enterprise Features — Analysis & Roadmap
 
-**Last updated:** 2026-04-19 (rev 3 — identity_ prefix, DB schema separation)  
+**Last updated:** 2026-04-19 (rev 4 — governance UI section analysis, Teams unblock)  
 **Scope:** Enterprise features to implement in the OSS codebase (bifost2)
 
 ---
@@ -11,7 +11,7 @@
 
 | Feature | DB | API | UI | Notes |
 |---|---|---|---|---|
-| Teams | ✅ | ✅ | ✅ | Full CRUD, budget + rate limit assignment |
+| Teams | ✅ | ✅ | ⚠️ | DB/API done; UI page exists but wired to @enterprise fallback — needs unwiring |
 | Customers | ✅ | ✅ | ✅ | Full CRUD, multi-tenancy |
 | Virtual Keys | ✅ | ✅ | ✅ | Provider configs, MCP control, model allowlists |
 | Budgets | ✅ | ✅ | ✅ | Calendar-aligned, flexible durations |
@@ -41,10 +41,42 @@
 | RBAC resource/operation enums | Defined in `ui/app/_fallbacks/enterprise/lib/contexts/rbacContext.tsx` |
 | RBAC context | Wired into UI but always returns `true` (no enforcement) |
 | Sessions table | Exists (`framework/configstore/tables/sessions.go`) — no `user_id` field, single admin only |
+| Teams UI components | `governance/views/teamsTable.tsx` + `teamDialog.tsx` exist but not wired to the Teams page (page uses @enterprise fallback instead) |
 
 ---
 
-## 2. Feature Specifications
+## 2. Governance UI Section — How It Maps to DB Domains
+
+The Governance sidebar groups all org entities + their spending policies in one place. The `identity_` vs `governance_` split is a **backend DB concern only** — the UI sees "entity with budget and rate limit" regardless of which table the data comes from.
+
+```
+Governance sidebar section
+    Virtual Keys  → governance_virtual_keys + governance_budgets       ✅ implemented
+    Users         → identity_users + governance_budgets/rate_limits    🔴 new
+    Teams         → governance_teams + governance_budgets              ⚠️ unblock UI
+    Business Units→ governance_business_units + governance_budgets     🔴 new
+    Customers     → governance_customers + governance_budgets          ✅ implemented
+```
+
+### Teams — unblock from @enterprise fallback
+
+Backend is complete. `governance/views/teamsTable.tsx` and `teamDialog.tsx` already exist.
+Fix: wire existing views into `governance/teams/page.tsx` instead of importing from `@enterprise`.
+Enterprise IdP sync feature stays behind `@enterprise` as a separate add-on button/panel.
+
+### Users — Governance view of `identity_users`
+
+API joins both domains: `SELECT identity_users.*, governance_budgets.*, governance_rate_limits.*`
+Same rendering pattern as Teams/Customers (entity table + budget sheet + rate limit sheet).
+
+### Business Units — pure governance entity
+
+`governance_business_units` has `budget_id` + `rate_limit_id` — identical pattern to Teams/Customers.
+No `identity_*` involvement. Shows BU hierarchy + team membership + spending policy.
+
+---
+
+## 3. Feature Specifications
 
 ### 2.1 User Management
 
@@ -350,20 +382,31 @@ User Management ──→ RBAC ──→ Audit Logs                  │
 
 ## 4. Implementation Roadmap
 
+### Phase 0 — Quick Wins (no new tables needed)
+**Goal:** Unblock existing backend work that is hidden behind @enterprise fallback.
+
+| # | Task | Layer | Effort | Output |
+|---|---|---|---|---|
+| 0.1 | Wire Teams UI — replace @enterprise fallback with existing `teamsTable.tsx` + `teamDialog.tsx` | Frontend | S | Teams page fully functional in OSS |
+
+**Exit criteria:** Teams page in Governance shows real data, CRUD works, no "Contact Us" fallback.
+
+---
+
 ### Phase 1 — Identity Foundation
 **Goal:** Establish user identity, SSO admin access, and RBAC enforcement. Everything else builds on this.
 
 | # | Task | Layer | Effort | Output |
 |---|---|---|---|---|
-| 1.1 | `identity_users` table + CRUD API | DB + GovernanceHandler | M | User entity, manual create/update/delete |
+| 1.1 | `identity_users` table + CRUD API + Governance Users UI | DB + GovernanceHandler + Frontend | M | User entity with per-user budget/rate limit, visible in Governance → Users |
 | 1.2 | `identity_roles/permissions` tables + seed system roles | DB | S | Admin/Developer/Viewer roles pre-seeded |
 | 1.3 | RBAC middleware | Transport | M | `/api/*` routes enforce permissions via `session.user_id → role` |
 | 1.4 | `identity_sso_configs` table + `user_id` on `sessions` | DB migration | S | Backward-compat session migration |
 | 1.5 | `SSOHandler` — Okta OIDC flow | Transport | M | Login via Okta, auto-provision user, session with `user_id` |
 | 1.6 | `SSOHandler` — Microsoft Entra flow | Transport | M | Login via Entra ID |
-| 1.7 | SSO config UI + User Management UI | Frontend | M | Admin can configure IdP, view/manage users |
+| 1.7 | SSO config UI + RBAC UI | Frontend | M | Admin can configure IdP and manage roles/permissions |
 
-**Implementation order within phase:** 1.1 → 1.2 → 1.3 (can run parallel) → 1.4 → 1.5 → 1.6 → 1.7
+**Implementation order within phase:** 1.1 → 1.2 → 1.3 (can run parallel with 1.2) → 1.4 → 1.5 → 1.6 → 1.7
 
 **Exit criteria:** Users can log in via SSO (Okta/Entra), are auto-provisioned into `identity_users`, assigned RBAC roles, and `/api/*` routes enforce those roles. Password login still works unchanged.
 
@@ -385,10 +428,10 @@ User Management ──→ RBAC ──→ Audit Logs                  │
 ### Phase 3 — Organizational Hierarchy
 **Goal:** Enterprise org structure with fine-grained access control.
 
-| # | Feature | Effort | Output |
-|---|---|---|---|
-| 3.1 | Business Units | M | `governance_business_units` table, CRUD API, team assignment |
-| 3.2 | Access Profiles | M | Profile definition, hierarchy propagation, CRUD UI |
+| # | Task | Layer | Effort | Output |
+|---|---|---|---|---|
+| 3.1 | Business Units | DB + GovernanceHandler + Frontend | M | `governance_business_units` table, CRUD API, Governance → Business Units UI (budget + rate limit, team hierarchy) |
+| 3.2 | Access Profiles | DB + GovernanceHandler + Frontend | M | Profile definition, hierarchy propagation (BU → Teams → Users), CRUD UI |
 
 **Exit criteria:** Organizations can model their department structure in Bifrost and apply access policies at each level.
 
@@ -433,11 +476,12 @@ User Management ──→ RBAC ──→ Audit Logs                  │
 
 | Phase | Features | Total Effort |
 |---|---|---|
-| Phase 1 | User Mgmt + SSO + RBAC | ~3 weeks |
+| Phase 0 | Teams UI unblock | ~1 day |
+| Phase 1 | User Mgmt + RBAC + SSO | ~3 weeks |
 | Phase 2 | Audit Logs + SIEM | ~2 weeks |
 | Phase 3 | Business Units + Access Profiles | ~2 weeks |
 | Phase 4 | SCIM (Okta + 4 more) | ~3 weeks |
-| **Total** | | **~10 weeks** |
+| **Total** | | **~10 weeks + 1 day** |
 
 ---
 
