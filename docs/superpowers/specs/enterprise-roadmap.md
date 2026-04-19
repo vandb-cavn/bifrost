@@ -1,6 +1,6 @@
 # Bifrost Enterprise Features — Analysis & Roadmap
 
-**Last updated:** 2026-04-19 (rev 2 — SSO admin architecture)  
+**Last updated:** 2026-04-19 (rev 3 — identity_ prefix, DB schema separation)  
 **Scope:** Enterprise features to implement in the OSS codebase (bifost2)
 
 ---
@@ -52,9 +52,9 @@
 - **Admin UI users** — log into dashboard, controlled by RBAC roles
 - **API consumer users** — call inference via virtual keys, controlled by budget/rate limits
 
-**One `governance_users` table, three consumers:**
+**One `identity_users` table, three consumers:**
 ```
-governance_users (id, email, name, role_id, budget_id, rate_limit_id, ...)
+identity_users (id, email, name, role_id, budget_id, rate_limit_id, ...)
     │
     ├── SSO Handler (transport)     → auto-provision on IdP login
     ├── RBAC Middleware (transport) → user_id → role → permissions on /api/*
@@ -89,8 +89,14 @@ PUT    /api/users/{user_id}
 DELETE /api/users/{user_id}
 ```
 
+**DB schema — two prefixes, two domains:**
+```
+identity_*   → WHO is the user, what role do they have, how do they log in
+governance_* → HOW MUCH can the user consume (budget, rate limit)
+```
+
 **DB tables needed:**
-- `governance_users` — id, email, name, customer_id, budget_id, rate_limit_id, role_id, created_at, updated_at
+- `identity_users` — id, email, name, team_id, budget_id, rate_limit_id, role_id, created_at, updated_at
 
 ---
 
@@ -122,10 +128,10 @@ PUT    /api/roles/{role_id}/permissions     { "permission_ids": [1,2,3] }
 ```
 
 **DB tables needed:**
-- `governance_roles` — id, name, description, is_system (bool), created_at
-- `governance_permissions` — id, resource, operation
-- `governance_role_permissions` — role_id, permission_id (join table)
-- `governance_user_roles` — user_id, role_id (join table)
+- `identity_roles` — id, name, description, is_system (bool), created_at
+- `identity_permissions` — id, resource, operation
+- `identity_role_permissions` — role_id, permission_id (join table)
+- `identity_user_roles` — user_id, role_id (join table)
 
 **Enforcement point:** New RBAC middleware in the **transport layer** — runs on all `/api/*` routes alongside existing `AuthMiddleware`. Resolves `session.user_id → roles → permissions → allow/deny`. The governance plugin is NOT involved in this enforcement path.
 
@@ -148,7 +154,7 @@ User hits /login
     → GET /api/sso/{provider}/start → redirect to IdP
     → IdP authenticates → callback to GET /api/sso/{provider}/callback
     → Bifrost validates JWT, extracts role claims
-    → Auto-provision user in governance_users (if first login)
+    → Auto-provision user in identity_users (if first login)
     → Assign highest-privilege role from claims
     → Create session with user_id → set cookie
     → redirect to /workspace
@@ -164,8 +170,8 @@ User hits /login
 - Existing password login continues to work unchanged
 
 **DB tables needed:**
-- `governance_sso_configs` — id, provider (okta/entra), client_id, client_secret (encrypted), issuer_url, role_claim_key, group_claim_key, enabled
-- Migration: add `user_id TEXT NULL` to `sessions` table
+- `identity_sso_configs` — id, provider (okta/entra), client_id, client_secret (encrypted), issuer_url, role_claim_key, group_claim_key, enabled
+- Migration: add `user_id TEXT NULL` to `sessions` table (FK → `identity_users.id`)
 
 **API contracts:**
 ```
@@ -175,7 +181,7 @@ GET  /api/sso/config               → get SSO config (admin only)
 PUT  /api/sso/config               → update SSO config (admin only)
 ```
 
-**Dependency:** User Management must exist first (auto-provisioning creates users in `governance_users`).
+**Dependency:** User Management must exist first (auto-provisioning creates users in `identity_users`).
 
 ---
 
@@ -215,8 +221,8 @@ DELETE /scim/v2/Groups/{id}
 - Role assignment via group membership
 
 **DB tables needed:**
-- `governance_scim_configs` — id, provider, bearer_token (encrypted), attribute_mappings (json), enabled
-- `governance_scim_sync_log` — id, provider, event_type, status, details, synced_at
+- `identity_scim_configs` — id, provider, bearer_token (encrypted), attribute_mappings (json), enabled
+- `identity_scim_sync_log` — id, provider, event_type, status, details, synced_at
 
 **Dependency:** User Management + SSO/OIDC must exist first.
 
@@ -349,17 +355,17 @@ User Management ──→ RBAC ──→ Audit Logs                  │
 
 | # | Task | Layer | Effort | Output |
 |---|---|---|---|---|
-| 1.1 | `governance_users` table + CRUD API | DB + GovernanceHandler | M | User entity, manual create/update/delete |
-| 1.2 | `governance_roles/permissions` tables + seed system roles | DB | S | Admin/Developer/Viewer roles pre-seeded |
+| 1.1 | `identity_users` table + CRUD API | DB + GovernanceHandler | M | User entity, manual create/update/delete |
+| 1.2 | `identity_roles/permissions` tables + seed system roles | DB | S | Admin/Developer/Viewer roles pre-seeded |
 | 1.3 | RBAC middleware | Transport | M | `/api/*` routes enforce permissions via `session.user_id → role` |
-| 1.4 | `governance_sso_configs` table + `user_id` on `sessions` | DB migration | S | Backward-compat session migration |
+| 1.4 | `identity_sso_configs` table + `user_id` on `sessions` | DB migration | S | Backward-compat session migration |
 | 1.5 | `SSOHandler` — Okta OIDC flow | Transport | M | Login via Okta, auto-provision user, session with `user_id` |
 | 1.6 | `SSOHandler` — Microsoft Entra flow | Transport | M | Login via Entra ID |
 | 1.7 | SSO config UI + User Management UI | Frontend | M | Admin can configure IdP, view/manage users |
 
 **Implementation order within phase:** 1.1 → 1.2 → 1.3 (can run parallel) → 1.4 → 1.5 → 1.6 → 1.7
 
-**Exit criteria:** Users can log in via SSO (Okta/Entra), are auto-provisioned into `governance_users`, assigned RBAC roles, and `/api/*` routes enforce those roles. Password login still works unchanged.
+**Exit criteria:** Users can log in via SSO (Okta/Entra), are auto-provisioned into `identity_users`, assigned RBAC roles, and `/api/*` routes enforce those roles. Password login still works unchanged.
 
 ---
 
@@ -437,12 +443,43 @@ User Management ──→ RBAC ──→ Audit Logs                  │
 
 ## 6. Technical Notes
 
-### Architecture separation: Transport vs Plugin
-
-Two distinct layers handle user-related concerns — they share the `governance_users` table but never call each other at request time:
+### DB schema: two prefixes, two domains
 
 ```
-governance_users (shared DB table)
+identity_*    → WHO: user identity, roles, permissions, SSO/SCIM config
+governance_*  → HOW MUCH: budgets, rate limits, virtual keys, routing rules (existing)
+```
+
+Full table map:
+```
+identity_users              ← new (Phase 1.1)
+identity_roles              ← new (Phase 1.2)
+identity_permissions        ← new (Phase 1.2)
+identity_role_permissions   ← new (Phase 1.2)
+identity_user_roles         ← new (Phase 1.2)
+identity_sso_configs        ← new (Phase 1.4)
+identity_scim_configs       ← new (Phase 4.1)
+identity_scim_sync_log      ← new (Phase 4.1)
+
+governance_budgets          ✅ existing
+governance_rate_limits      ✅ existing
+governance_virtual_keys     ✅ existing
+governance_teams            ✅ existing
+governance_customers        ✅ existing
+governance_routing_rules    ✅ existing
+governance_audit_events     ← new (Phase 2.1)
+governance_access_profiles  ← new (Phase 3.2)
+governance_business_units   ← new (Phase 3.1)
+
+sessions                    ✅ existing — add nullable user_id FK → identity_users
+```
+
+### Architecture separation: Transport vs Plugin
+
+Two distinct layers handle user-related concerns — they share `identity_users` but never call each other at request time:
+
+```
+identity_users (DB)
         │
         ├── Transport layer (SSOHandler, RBAC middleware, SessionHandler)
         │       Handles: admin UI login, session management, /api/* access control
@@ -451,22 +488,22 @@ governance_users (shared DB table)
         └── Governance plugin (inference pipeline)
                 Handles: budget/rate limit checks on /v1/* inference requests
                 Reads: in-memory UserGovernance store (user_id → budget + rate limit)
-                Does NOT query governance_users at inference time
+                Does NOT query identity_users at inference time
 ```
 
-Write path: User Management CRUD → updates `governance_users` AND calls `governance.UpdateUserGovernanceInMemory()`.
+Write path: User Management CRUD → updates `identity_users` AND calls `governance.UpdateUserGovernanceInMemory()`.
 
 ### DB migration strategy
-- All new tables prefixed `governance_` consistent with existing schema
+- New identity tables use `identity_` prefix; new governance tables keep `governance_` prefix
 - Additive-only migrations (no breaking changes to existing tables)
-- `sessions` table: add nullable `user_id TEXT` — NULL = legacy single-admin, non-NULL = SSO user
-- `governance_teams` gets new nullable FK `business_unit_id` (non-breaking)
+- `sessions` table: add nullable `user_id TEXT` FK → `identity_users.id` — NULL = legacy single-admin, non-NULL = SSO user
+- `governance_teams` gets new nullable FK `business_unit_id` → `governance_business_units.id` (non-breaking)
 
 ### SSO handler
 - New `SSOHandler` in `transports/bifrost-http/handlers/sso.go` alongside existing `session.go`
 - Implements OIDC Authorization Code flow (no implicit flow)
 - State param (nonce) stored in short-lived DB record to prevent CSRF
-- On callback: validate JWT → upsert `governance_users` → create `sessions` with `user_id` → set cookie
+- On callback: validate JWT → upsert `identity_users` → create `sessions` with `user_id` → set cookie
 
 ### RBAC enforcement
 - New `RBACMiddleware` in transport layer — runs after existing `AuthMiddleware`
