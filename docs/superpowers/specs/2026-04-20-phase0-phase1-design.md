@@ -15,8 +15,8 @@
 
 | File | Status |
 |------|--------|
-| `ui/components/governance/views/teamsTable.tsx` | Exists, renders team list |
-| `ui/components/governance/views/teamDialog.tsx` | Exists, create/edit dialog |
+| `ui/app/workspace/governance/views/teamsTable.tsx` | Exists, renders team list |
+| `ui/app/workspace/governance/views/teamDialog.tsx` | Exists, create/edit dialog |
 | `ui/app/workspace/governance/teams/page.tsx` | Broken — imports `@enterprise` fallback |
 
 ### Fix
@@ -28,8 +28,8 @@ Replace the `@enterprise` import in `governance/teams/page.tsx` with direct impo
 import TeamsView from "@enterprise/components/user-groups/teamsView";
 
 // After
-import { TeamsTable } from "@/components/governance/views/teamsTable";
-import { TeamDialog } from "@/components/governance/views/teamDialog";
+import { TeamsTable } from "@/app/workspace/governance/views/teamsTable";
+import { TeamDialog } from "@/app/workspace/governance/views/teamDialog";
 ```
 
 Wire `TeamsTable` and `TeamDialog` into the page layout matching the pattern used by other governance list pages (Virtual Keys, Users).
@@ -54,8 +54,8 @@ CREATE TABLE governance_users (
     email       TEXT NOT NULL UNIQUE,
     name        TEXT NOT NULL DEFAULT '',
     team_id     TEXT REFERENCES governance_teams(id) ON DELETE SET NULL,
-    budget_id   TEXT REFERENCES budgets(id) ON DELETE SET NULL,
-    rate_limit_id TEXT REFERENCES rate_limits(id) ON DELETE SET NULL,
+    budget_id   TEXT REFERENCES governance_budgets(id) ON DELETE SET NULL,
+    rate_limit_id TEXT REFERENCES governance_rate_limits(id) ON DELETE SET NULL,
     auth_method TEXT NOT NULL DEFAULT 'password',  -- 'password' | 'oidc'
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -115,10 +115,10 @@ func (s *SQLiteConfigStore) DeleteUser(ctx context.Context, id string) error {
             return err
         }
         if user.BudgetID != nil {
-            tx.Delete(&tables.BudgetsTable{}, "id = ?", *user.BudgetID)
+            tx.Delete(&tables.TableBudget{}, "id = ?", *user.BudgetID)
         }
         if user.RateLimitID != nil {
-            tx.Delete(&tables.RateLimitsTable{}, "id = ?", *user.RateLimitID)
+            tx.Delete(&tables.TableRateLimit{}, "id = ?", *user.RateLimitID)
         }
         return tx.Delete(&user).Error
     })
@@ -282,24 +282,25 @@ On cache miss or TTL expiry: fetch JWKS with 5s timeout, store result. Cache is 
 
 ### `is-auth-enabled` Response Extension
 
-Existing endpoint `GET /api/session/is-auth-enabled` returns:
+Existing endpoint `GET /api/session/is-auth-enabled` currently returns:
 
 ```json
-{ "auth_enabled": true }
+{ "is_auth_enabled": true, "has_valid_token": false }
 ```
 
 Extended to:
 
 ```json
 {
-  "auth_enabled": true,
+  "is_auth_enabled": true,
+  "has_valid_token": false,
   "sso_enabled": true
 }
 ```
 
-`sso_enabled` = `true` if any row in `governance_sso_configs` has `enabled = true`. Computed at request time (single DB count query). No new endpoint — one additional field on existing response.
+`sso_enabled` = `true` if any row in `governance_sso_configs` has `enabled = true`. Computed at request time (single DB count query). No new endpoint — one additional field on existing response. Existing `is_auth_enabled` and `has_valid_token` fields are unchanged.
 
-Login page reads this response and conditionally renders the "Sign in with SSO" button. If `sso_enabled` is false, the button is hidden.
+Login page reads this response and conditionally renders the "Sign in with SSO" button. If `sso_enabled` is false or absent, the button is hidden.
 
 ### Acceptance Criteria
 
@@ -309,7 +310,7 @@ Login page reads this response and conditionally renders the "Sign in with SSO" 
 - Replay attack blocked (nonce single-use)
 - JWKS verified (signature + iss/aud/exp)
 - `UpsertUserByEmail` creates user on first SSO login, updates name on subsequent logins
-- `is-auth-enabled` response includes `sso_enabled` field
+- `is-auth-enabled` response includes `sso_enabled` field alongside existing `is_auth_enabled` + `has_valid_token`
 - Login page shows "Sign in with SSO" button only when `sso_enabled: true`
 
 ---
@@ -462,7 +463,7 @@ Response body capped at 64 KB (`io.LimitReader`).
 
 ### UI: User Provisioning Page
 
-`/workspace/user-provisioning` — tabbed layout:
+`/workspace/scim` (existing route, `ui/app/workspace/scim/page.tsx`) — replace current SCIM-only content with tabbed layout:
 
 **Tab 1: SSO / IdP Settings**
 - Provider dropdown (Okta / Microsoft Entra)
@@ -474,7 +475,7 @@ Response body capped at 64 KB (`io.LimitReader`).
 **Tab 2: SCIM** (placeholder for Phase 2)
 - Greyed out with "Coming soon" badge
 
-The existing `/workspace/user-provisioning` page that showed only SCIM content is replaced with this tabbed structure.
+The existing `ui/app/workspace/scim/page.tsx` gains a tab wrapper; existing SCIM content moves into Tab 2.
 
 ### Login Page SSO Button
 
@@ -482,17 +483,17 @@ The existing `/workspace/user-provisioning` page that showed only SCIM content i
 
 ```tsx
 // Fetch on mount — reuses existing is-auth-enabled call
-const { auth_enabled, sso_enabled } = await fetch("/api/session/is-auth-enabled").then(r => r.json());
+const { is_auth_enabled, sso_enabled } = await fetch("/api/session/is-auth-enabled").then(r => r.json());
 
 // Render
 {sso_enabled && (
-  <Button variant="outline" onClick={() => window.location.href = "/api/sso/login?provider=okta"}>
+  <Button variant="outline" onClick={() => window.location.href = "/api/sso/login"}>
     Sign in with SSO
   </Button>
 )}
 ```
 
-If multiple providers are configured and enabled, a single "Sign in with SSO" button still suffices — the backend selects the first enabled provider, or the UI can show a provider select dropdown (deferred to Phase 2).
+`GET /api/sso/login` is provider-agnostic: the backend reads `governance_sso_configs`, picks the first enabled config, and initiates the PKCE flow for that provider. The login page never names a provider. If no enabled config exists, the endpoint returns 404 and the button is already hidden (because `sso_enabled` is false).
 
 ### Acceptance Criteria
 
