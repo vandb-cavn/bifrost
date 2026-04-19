@@ -146,6 +146,17 @@ var embeddingParamsKnownFields = map[string]bool{
 	"dimensions":      true,
 }
 
+var searchParamsKnownFields = map[string]bool{
+	"model":               true,
+	"query":               true,
+	"fallbacks":           true,
+	"max_results":         true,
+	"country":             true,
+	"language":            true,
+	"include_answer":      true,
+	"include_raw_content": true,
+}
+
 var rerankParamsKnownFields = map[string]bool{
 	"model":              true,
 	"query":              true,
@@ -451,6 +462,12 @@ type EmbeddingRequest struct {
 	*schemas.EmbeddingParameters
 }
 
+type SearchRequest struct {
+	Query string `json:"query"`
+	BifrostParams
+	*schemas.BifrostSearchParameters
+}
+
 // RerankRequest is a bifrost rerank request
 type RerankRequest struct {
 	Query     string                   `json:"query"`
@@ -599,6 +616,7 @@ var PathToTypeMapping = map[string]schemas.RequestType{
 	"/v1/chat/completions":       schemas.ChatCompletionRequest,
 	"/v1/responses":              schemas.ResponsesRequest,
 	"/v1/embeddings":             schemas.EmbeddingRequest,
+	"/v1/search":                 schemas.SearchRequest,
 	"/v1/rerank":                 schemas.RerankRequest,
 	"/v1/ocr":                    schemas.OCRRequest,
 	"/v1/audio/speech":           schemas.SpeechRequest,
@@ -644,6 +662,7 @@ func (h *CompletionHandler) RegisterRoutes(r *router.Router, middlewares ...sche
 	r.POST("/v1/chat/completions", lib.ChainMiddlewares(h.chatCompletion, baseMiddlewares...))
 	r.POST("/v1/responses", lib.ChainMiddlewares(h.responses, baseMiddlewares...))
 	r.POST("/v1/embeddings", lib.ChainMiddlewares(h.embeddings, baseMiddlewares...))
+	r.POST("/v1/search", lib.ChainMiddlewares(h.search, baseMiddlewares...))
 	r.POST("/v1/rerank", lib.ChainMiddlewares(h.rerank, baseMiddlewares...))
 	r.POST("/v1/ocr", lib.ChainMiddlewares(h.ocr, baseMiddlewares...))
 	r.POST("/v1/audio/speech", lib.ChainMiddlewares(h.speech, baseMiddlewares...))
@@ -1157,6 +1176,85 @@ func (h *CompletionHandler) embeddings(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	// Send successful response
+	SendJSON(ctx, resp)
+}
+
+// prepareSearchRequest prepares a BifrostSearchRequest from the HTTP request body
+func prepareSearchRequest(ctx *fasthttp.RequestCtx) (*SearchRequest, *schemas.BifrostSearchRequest, error) {
+	var req SearchRequest
+	if err := sonic.Unmarshal(ctx.PostBody(), &req); err != nil {
+		return nil, nil, fmt.Errorf("invalid request format: %v", err)
+	}
+
+	provider, modelName := schemas.ParseModelString(req.Model, "")
+	if provider == "" || modelName == "" {
+		return nil, nil, fmt.Errorf("model should be in provider/model format")
+	}
+
+	fallbacks, err := parseFallbacks(req.Fallbacks)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse fallbacks: %v", err)
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		return nil, nil, fmt.Errorf("query is required for search")
+	}
+
+	if req.BifrostSearchParameters == nil {
+		req.BifrostSearchParameters = &schemas.BifrostSearchParameters{}
+	}
+	if req.BifrostSearchParameters.MaxResults != nil && *req.BifrostSearchParameters.MaxResults < 1 {
+		return nil, nil, fmt.Errorf("max_results must be at least 1")
+	}
+
+	extraParams, err := extractExtraParams(ctx.PostBody(), searchParamsKnownFields)
+	if err != nil {
+		logger.Warn("Failed to extract extra params: %v", err)
+	} else {
+		req.BifrostSearchParameters.ExtraParams = extraParams
+	}
+
+	bifrostSearchReq := &schemas.BifrostSearchRequest{
+		Provider:  schemas.ModelProvider(provider),
+		Model:     modelName,
+		Query:     req.Query,
+		Params:    req.BifrostSearchParameters,
+		Fallbacks: fallbacks,
+	}
+
+	return &req, bifrostSearchReq, nil
+}
+
+// search handles POST /v1/search - Process search requests
+func (h *CompletionHandler) search(ctx *fasthttp.RequestCtx) {
+	_, bifrostSearchReq, err := prepareSearchRequest(ctx)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, err.Error())
+		return
+	}
+
+	bifrostCtx, cancel := lib.ConvertToBifrostContext(ctx, h.handlerStore.ShouldAllowDirectKeys(), h.config.GetHeaderMatcher(), h.config.GetMCPHeaderCombinedAllowlist())
+	defer cancel()
+	if bifrostCtx == nil {
+		SendError(ctx, fasthttp.StatusBadRequest, "Failed to convert context")
+		return
+	}
+
+	resp, bifrostErr := h.client.SearchRequest(bifrostCtx, bifrostSearchReq)
+	if bifrostErr != nil {
+		forwardProviderHeadersFromContext(ctx, bifrostCtx)
+		SendBifrostError(ctx, bifrostErr)
+		return
+	}
+
+	if resp != nil && resp.ExtraFields.ProviderResponseHeaders != nil {
+		forwardProviderHeaders(ctx, resp.ExtraFields.ProviderResponseHeaders)
+	}
+
+	if streamLargeResponseIfActive(ctx, bifrostCtx) {
+		return
+	}
+
 	SendJSON(ctx, resp)
 }
 
