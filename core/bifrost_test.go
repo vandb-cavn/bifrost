@@ -635,6 +635,33 @@ func TestRetryableStatusCodes(t *testing.T) {
 	}
 }
 
+func TestCreateBaseProviderSearchProviders(t *testing.T) {
+	bifrost := &Bifrost{
+		logger: NewDefaultLogger(schemas.LogLevelError),
+	}
+
+	providers := []schemas.ModelProvider{
+		schemas.Tavily,
+		schemas.Brave,
+		schemas.Exa,
+	}
+
+	for _, providerKey := range providers {
+		t.Run(string(providerKey), func(t *testing.T) {
+			provider, err := bifrost.createBaseProvider(providerKey, &schemas.ProviderConfig{})
+			if err != nil {
+				t.Fatalf("expected no error creating provider %s, got %v", providerKey, err)
+			}
+			if provider == nil {
+				t.Fatalf("expected provider for %s, got nil", providerKey)
+			}
+			if got := provider.GetProviderKey(); got != providerKey {
+				t.Fatalf("expected provider key %s, got %s", providerKey, got)
+			}
+		})
+	}
+}
+
 func TestResetBifrostRequestClearsSearchRequest(t *testing.T) {
 	req := &schemas.BifrostRequest{
 		RequestType:   schemas.SearchRequest,
