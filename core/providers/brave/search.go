@@ -117,6 +117,7 @@ func (provider *BraveProvider) Search(ctx *schemas.BifrostContext, key schemas.K
 
 	req.SetRequestURI(uri)
 	req.Header.SetMethod(http.MethodGet)
+	req.Header.Set("Accept", "application/json")
 	if key.Value.GetValue() != "" {
 		req.Header.Set("X-Subscription-Token", key.Value.GetValue())
 	}
