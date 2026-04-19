@@ -1,0 +1,37 @@
+---
+title: "Exa AI"
+description: "Exa AI provider guide - /v1/search support with result count controls, location hints, and rich content extraction"
+icon: "search"
+---
+
+## Overview
+
+Exa AI is available in Bifrost as a `/v1/search` backend. Bifrost converts the unified search request into Exa's search API, then maps the returned results into Bifrost's normalized search response structure.
+
+### Supported Operations
+
+| Operation | Non-Streaming | Streaming | Endpoint |
+|-----------|---------------|-----------|----------|
+| Search | ✅ | ❌ | `/v1/search` |
+
+## Example
+
+```bash
+curl -X POST http://localhost:8080/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "exa_ai/default",
+    "query": "best practices for gateway caching",
+    "max_results": 5,
+    "country": "US",
+    "include_raw_content": true
+  }'
+```
+
+## Notes
+
+- Search parameters are top-level request fields.
+- `max_results` maps to Exa's result count.
+- `country` is used as a location hint when present.
+- `include_raw_content` enables richer result content extraction.
+- Exa usage cost is preserved in the Bifrost search usage payload when available.

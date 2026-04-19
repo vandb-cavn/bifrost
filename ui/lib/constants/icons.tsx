@@ -1,6 +1,6 @@
 "use client";
 
-import { Landmark, Network, Shuffle } from "lucide-react";
+import { Landmark, Network, Search, Shuffle } from "lucide-react";
 import { useTheme } from "next-themes";
 
 type IconSize = "xs" | "sm" | "md" | "lg" | "xl" | number;
@@ -399,6 +399,12 @@ export const ProviderIcons = {
 			</svg>
 		);
 	},
+
+	tavily: ({ size = "md", className = "" }: IconProps) => <Search size={resolveSize(size)} className={className} />,
+
+	brave: ({ size = "md", className = "" }: IconProps) => <Search size={resolveSize(size)} className={className} />,
+
+	exa_ai: ({ size = "md", className = "" }: IconProps) => <Search size={resolveSize(size)} className={className} />,
 
 	sgl: ({ size = "md", className = "" }: IconProps) => {
 		const resolvedSize = resolveSize(size);

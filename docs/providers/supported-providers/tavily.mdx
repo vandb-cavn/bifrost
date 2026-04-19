@@ -1,0 +1,37 @@
+---
+title: "Tavily"
+description: "Tavily search provider guide - /v1/search support with result counts, country and language filters, and raw content handling"
+icon: "search"
+---
+
+## Overview
+
+Tavily is a first-class `/v1/search` backend in Bifrost. Requests are translated into Tavily's search API and normalized back into Bifrost's search response shape.
+
+### Supported Operations
+
+| Operation | Non-Streaming | Streaming | Endpoint |
+|-----------|---------------|-----------|----------|
+| Search | ✅ | ❌ | `/v1/search` |
+
+## Example
+
+```bash
+curl -X POST http://localhost:8080/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tavily/default",
+    "query": "latest releases in AI infrastructure",
+    "max_results": 5,
+    "country": "US",
+    "language": "en",
+    "include_raw_content": true
+  }'
+```
+
+## Notes
+
+- Search parameters are top-level request fields.
+- `max_results` maps to Tavily's result count.
+- `country` and `language` are forwarded when present.
+- `include_raw_content` enables richer result content in Bifrost responses.

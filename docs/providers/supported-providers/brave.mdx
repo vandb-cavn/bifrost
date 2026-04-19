@@ -1,0 +1,37 @@
+---
+title: "Brave Search"
+description: "Brave Search provider guide - /v1/search support with query, country, language, and count mapping"
+icon: "search"
+---
+
+## Overview
+
+Brave Search is exposed in Bifrost as a dedicated `/v1/search` provider. Bifrost maps the unified search request into Brave's web search endpoint and normalizes the response.
+
+### Supported Operations
+
+| Operation | Non-Streaming | Streaming | Endpoint |
+|-----------|---------------|-----------|----------|
+| Search | ✅ | ❌ | `/v1/search` |
+
+## Example
+
+```bash
+curl -X POST http://localhost:8080/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "brave/default",
+    "query": "Bifrost gateway release notes",
+    "max_results": 10,
+    "country": "US",
+    "language": "en"
+  }'
+```
+
+## Notes
+
+- Search parameters are top-level request fields.
+- `query` maps to Brave's `q` parameter.
+- `max_results` maps to `count`.
+- `country` maps to Brave's country filter.
+- `language` maps to Brave's `search_lang`.

@@ -455,6 +455,9 @@ export interface PricingOverridePatch {
 	output_cost_per_second?: number;
 	// Other
 	search_context_cost_per_query?: number;
+	search_cost_per_request?: number;
+	search_cost_per_result?: number;
+	search_cost_per_credit?: number;
 	code_interpreter_cost_per_session?: number;
 }
 

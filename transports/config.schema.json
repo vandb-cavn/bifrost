@@ -246,7 +246,13 @@
         "bedrock": {
           "$ref": "#/$defs/provider_with_bedrock_config"
         },
+        "brave": {
+          "$ref": "#/$defs/provider"
+        },
         "cohere": {
+          "$ref": "#/$defs/provider"
+        },
+        "exa_ai": {
           "$ref": "#/$defs/provider"
         },
         "azure": {
@@ -277,6 +283,9 @@
           "$ref": "#/$defs/provider"
         },
         "perplexity": {
+          "$ref": "#/$defs/provider"
+        },
+        "tavily": {
           "$ref": "#/$defs/provider"
         },
         "replicate": {
@@ -4125,6 +4134,25 @@
         },
         "pricing_patch": {
           "type": "string",
+          "contentMediaType": "application/json",
+          "contentSchema": {
+            "type": "object",
+            "properties": {
+              "search_cost_per_request": {
+                "type": "number",
+                "minimum": 0
+              },
+              "search_cost_per_result": {
+                "type": "number",
+                "minimum": 0
+              },
+              "search_cost_per_credit": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": true
+          },
           "description": "JSON-encoded pricing fields to override (e.g. '{\"input_cost_per_token\":0.000001}')"
         },
         "config_hash": {
@@ -4162,6 +4190,7 @@
         "image_generation",
         "image_variation",
         "image_edit",
+        "search",
         "video_generation",
         "video_remix"
       ]

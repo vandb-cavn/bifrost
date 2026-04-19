@@ -8,11 +8,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { FieldErrors, PricingFieldKey } from "./pricingOverrideSheet";
 import { PRICING_FIELDS } from "./pricingOverrideSheet";
 
-type GroupKey = "chat" | "embedding" | "rerank" | "audio" | "image" | "video";
+type GroupKey = "chat" | "embedding" | "search" | "rerank" | "audio" | "image" | "video";
 
 const PRICING_GROUPS: { key: GroupKey; label: string }[] = [
 	{ key: "chat", label: "Chat / Text / Responses" },
 	{ key: "embedding", label: "Embedding" },
+	{ key: "search", label: "Search" },
 	{ key: "rerank", label: "Rerank" },
 	{ key: "audio", label: "Audio" },
 	{ key: "image", label: "Image" },
@@ -24,6 +25,7 @@ const REQUEST_TYPE_TO_CATEGORY: Record<string, GroupKey> = {
 	text_completion: "chat",
 	responses: "chat",
 	embedding: "embedding",
+	search: "search",
 	rerank: "rerank",
 	speech: "audio",
 	transcription: "audio",

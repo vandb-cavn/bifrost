@@ -42,6 +42,10 @@ export const REQUEST_TYPE_GROUPS = [
 		types: ["embedding"],
 	},
 	{
+		label: "Search",
+		types: ["search"],
+	},
+	{
 		label: "Rerank",
 		types: ["rerank"],
 	},
@@ -167,6 +171,9 @@ export const PRICING_FIELDS = [
 	{ key: "cache_read_input_token_cost_above_272k_tokens", label: "Cache read / token (>272k)", group: "chat", requestTypeGroups: ["chat"] },
 	{ key: "cache_read_input_token_cost_above_272k_tokens_priority", label: "Cache read / token (>272k, priority)", group: "chat", requestTypeGroups: ["chat"] },
 	{ key: "search_context_cost_per_query", label: "Search context / query", group: "chat", requestTypeGroups: ["chat", "rerank"] },
+	{ key: "search_cost_per_request", label: "Search / request", group: "search", requestTypeGroups: ["search"] },
+	{ key: "search_cost_per_result", label: "Search / result", group: "search", requestTypeGroups: ["search"] },
+	{ key: "search_cost_per_credit", label: "Search / credit", group: "search", requestTypeGroups: ["search"] },
 	{ key: "code_interpreter_cost_per_session", label: "Code interpreter / session", group: "chat", requestTypeGroups: ["chat"] },
 	// Audio fields
 	{ key: "input_cost_per_character", label: "Input / character", group: "audio", requestTypeGroups: ["audio"] },

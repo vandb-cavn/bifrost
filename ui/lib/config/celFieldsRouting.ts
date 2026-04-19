@@ -61,6 +61,7 @@ export const baseRoutingFields: CELFieldDefinition[] = [
 			{ name: "chat_completion", label: "Chat Completion" },
 			{ name: "responses", label: "Responses" },
 			{ name: "embedding", label: "Embeddings" },
+			{ name: "search", label: "Search" },
 			{ name: "image_generation", label: "Image Generation" },
 			{ name: "image_edit", label: "Image Edit" },
 			{ name: "image_variation", label: "Image Variation" },

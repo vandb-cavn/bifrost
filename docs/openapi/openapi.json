@@ -55014,12 +55014,13 @@
           "rerank",
           "speech",
           "transcription",
-          "image_generation",
-          "image_variation",
-          "image_edit",
-          "video_generation",
-          "video_remix"
-        ]
+              "image_generation",
+              "image_variation",
+              "image_edit",
+              "search",
+              "video_generation",
+              "video_remix"
+            ]
       },
       "PricingPatch": {
         "type": "object",
@@ -55186,6 +55187,18 @@
             "minimum": 0
           },
           "search_context_cost_per_query": {
+            "type": "number",
+            "minimum": 0
+          },
+          "search_cost_per_request": {
+            "type": "number",
+            "minimum": 0
+          },
+          "search_cost_per_result": {
+            "type": "number",
+            "minimum": 0
+          },
+          "search_cost_per_credit": {
             "type": "number",
             "minimum": 0
           },

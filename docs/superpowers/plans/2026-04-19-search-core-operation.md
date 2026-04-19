@@ -1717,6 +1717,8 @@ git commit -m "feat(search): wire governance logging and pricing"
 - Modify: `ui/lib/constants/config.ts`
 - Modify: `ui/lib/constants/logs.ts`
 - Modify: `ui/lib/constants/icons.tsx`
+- Modify: `ui/lib/config/celFieldsRouting.ts`
+- Modify: `ui/app/workspace/custom-pricing/overrides/pricingFieldSelector.tsx`
 - Create: `docs/providers/supported-providers/tavily.mdx`
 - Create: `docs/providers/supported-providers/brave.mdx`
 - Create: `docs/providers/supported-providers/exa-ai.mdx`
@@ -1769,6 +1771,10 @@ exa_ai: "Exa"
 ```
 
 Use a neutral fallback icon if no existing branded icon pattern is available. Do not add a full Search UI page.
+
+Update the routing and pricing builders to expose search-specific choices:
+- add `search` to the CEL routing builder `request_type` values
+- add a `search` pricing group so `search_cost_*` fields render under the Search category
 
 - [ ] **Step 3: Add provider docs**
 
