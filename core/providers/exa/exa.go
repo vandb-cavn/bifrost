@@ -86,10 +86,6 @@ func (provider *ExaProvider) ResponsesStream(_ *schemas.BifrostContext, _ schema
 	return nil, provider.unsupported(schemas.ResponsesStreamRequest)
 }
 
-func (provider *ExaProvider) Search(_ *schemas.BifrostContext, _ schemas.Key, _ *schemas.BifrostSearchRequest) (*schemas.BifrostSearchResponse, *schemas.BifrostError) {
-	return nil, provider.unsupported(schemas.SearchRequest)
-}
-
 func (provider *ExaProvider) CountTokens(_ *schemas.BifrostContext, _ schemas.Key, _ *schemas.BifrostResponsesRequest) (*schemas.BifrostCountTokensResponse, *schemas.BifrostError) {
 	return nil, provider.unsupported(schemas.CountTokensRequest)
 }
