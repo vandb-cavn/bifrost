@@ -715,6 +715,14 @@ func (p *LoggerPlugin) applyNonStreamingOutputToEntry(entry *logstore.Log, resul
 		if result.RerankResponse != nil && len(result.RerankResponse.Results) > 0 {
 			entry.RerankOutputParsed = result.RerankResponse.Results
 		}
+		if result.SearchResponse != nil && len(result.SearchResponse.Results) > 0 {
+			entry.OutputMessageParsed = &schemas.ChatMessage{
+				Role: schemas.ChatMessageRoleAssistant,
+				Content: &schemas.ChatMessageContent{
+					ContentStr: schemas.Ptr(result.SearchResponse.Results[0].Snippet),
+				},
+			}
+		}
 		if result.OCRResponse != nil {
 			entry.OCROutputParsed = result.OCRResponse
 		}

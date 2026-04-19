@@ -31,8 +31,8 @@ type TableModelPricing struct {
 	InputCostPerAudioPerSecondAbove128kTokens *float64 `gorm:"default:null;column:input_cost_per_audio_per_second_above_128k_tokens" json:"input_cost_per_audio_per_second_above_128k_tokens,omitempty"`
 	OutputCostPerTokenAbove128kTokens         *float64 `gorm:"default:null;column:output_cost_per_token_above_128k_tokens" json:"output_cost_per_token_above_128k_tokens,omitempty"`
 	// Costs - 200k Tier
-	InputCostPerTokenAbove200kTokens         *float64 `gorm:"default:null;column:input_cost_per_token_above_200k_tokens" json:"input_cost_per_token_above_200k_tokens,omitempty"`
-	InputCostPerTokenAbove200kTokensPriority *float64 `gorm:"default:null;column:input_cost_per_token_above_200k_tokens_priority" json:"input_cost_per_token_above_200k_tokens_priority,omitempty"`
+	InputCostPerTokenAbove200kTokens          *float64 `gorm:"default:null;column:input_cost_per_token_above_200k_tokens" json:"input_cost_per_token_above_200k_tokens,omitempty"`
+	InputCostPerTokenAbove200kTokensPriority  *float64 `gorm:"default:null;column:input_cost_per_token_above_200k_tokens_priority" json:"input_cost_per_token_above_200k_tokens_priority,omitempty"`
 	OutputCostPerTokenAbove200kTokens         *float64 `gorm:"default:null;column:output_cost_per_token_above_200k_tokens" json:"output_cost_per_token_above_200k_tokens,omitempty"`
 	OutputCostPerTokenAbove200kTokensPriority *float64 `gorm:"default:null;column:output_cost_per_token_above_200k_tokens_priority" json:"output_cost_per_token_above_200k_tokens_priority,omitempty"`
 	// Costs - 272k Tier
@@ -86,6 +86,9 @@ type TableModelPricing struct {
 
 	// Costs - Other
 	SearchContextCostPerQuery     *float64 `gorm:"default:null;column:search_context_cost_per_query" json:"search_context_cost_per_query,omitempty"`
+	SearchCostPerRequest          *float64 `gorm:"default:null;column:search_cost_per_request" json:"search_cost_per_request,omitempty"`
+	SearchCostPerResult           *float64 `gorm:"default:null;column:search_cost_per_result" json:"search_cost_per_result,omitempty"`
+	SearchCostPerCredit           *float64 `gorm:"default:null;column:search_cost_per_credit" json:"search_cost_per_credit,omitempty"`
 	CodeInterpreterCostPerSession *float64 `gorm:"default:null;column:code_interpreter_cost_per_session" json:"code_interpreter_cost_per_session,omitempty"`
 }
 

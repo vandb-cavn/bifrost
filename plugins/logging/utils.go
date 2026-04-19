@@ -545,6 +545,17 @@ func (p *LoggerPlugin) extractInputHistory(request *schemas.BifrostRequest) ([]s
 			},
 		}, []schemas.ResponsesMessage{}
 	}
+	if request.SearchRequest != nil {
+		query := request.SearchRequest.Query
+		return []schemas.ChatMessage{
+			{
+				Role: schemas.ChatMessageRoleUser,
+				Content: &schemas.ChatMessageContent{
+					ContentStr: &query,
+				},
+			},
+		}, []schemas.ResponsesMessage{}
+	}
 	if request.OCRRequest != nil {
 		var docRef string
 		if request.OCRRequest.Document.DocumentURL != nil {

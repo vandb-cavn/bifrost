@@ -150,6 +150,9 @@ type PricingOptions struct {
 	// consumed for that provider; the collapsed value is therefore correct in all cases.
 	// See UnmarshalJSON below for the custom decoding logic.
 	SearchContextCostPerQuery     *float64 `json:"search_context_cost_per_query,omitempty"`
+	SearchCostPerRequest          *float64 `json:"search_cost_per_request,omitempty"`
+	SearchCostPerResult           *float64 `json:"search_cost_per_result,omitempty"`
+	SearchCostPerCredit           *float64 `json:"search_cost_per_credit,omitempty"`
 	CodeInterpreterCostPerSession *float64 `json:"code_interpreter_cost_per_session,omitempty"`
 }
 
@@ -168,6 +171,7 @@ type costInput struct {
 	audioSeconds        *int
 	audioTokenDetails   *schemas.TranscriptionUsageInputTokenDetails
 	imageUsage          *schemas.ImageUsage
+	searchUsage         *schemas.BifrostSearchUsage
 	imageSize           string // e.g. "1024x1024", used for per-pixel pricing
 	imageQuality        string // "low", "medium", "high", "auto" (gpt-image-1.5); empty = use base rate
 	videoSeconds        *int
@@ -183,6 +187,7 @@ func (mc *ModelCatalog) GetPricingEntryForModel(model string, provider schemas.M
 		schemas.TextCompletionRequest,
 		schemas.ChatCompletionRequest,
 		schemas.ResponsesRequest,
+		schemas.SearchRequest,
 		schemas.EmbeddingRequest,
 		schemas.RerankRequest,
 		schemas.SpeechRequest,
@@ -280,7 +285,7 @@ func (mc *ModelCatalog) calculateBaseCost(result *schemas.BifrostResponse, scope
 	}
 
 	// If no usage data at all, nothing to price
-	if input.usage == nil && input.audioSeconds == nil && input.audioTokenDetails == nil && input.imageUsage == nil && input.videoSeconds == nil && input.audioTextInputChars == 0 {
+	if input.usage == nil && input.searchUsage == nil && input.audioSeconds == nil && input.audioTokenDetails == nil && input.imageUsage == nil && input.videoSeconds == nil && input.audioTextInputChars == 0 {
 		return 0
 	}
 
@@ -297,6 +302,8 @@ func (mc *ModelCatalog) calculateBaseCost(result *schemas.BifrostResponse, scope
 	switch requestType {
 	case schemas.ChatCompletionRequest, schemas.TextCompletionRequest, schemas.ResponsesRequest:
 		return computeTextCost(pricing, input.usage, input.tier)
+	case schemas.SearchRequest:
+		return computeSearchCost(pricing, input.searchUsage)
 	case schemas.EmbeddingRequest:
 		return computeEmbeddingCost(pricing, input.usage, input.tier)
 	case schemas.RerankRequest:
@@ -342,6 +349,9 @@ func extractCostInput(result *schemas.BifrostResponse) costInput {
 
 	case result.RerankResponse != nil && result.RerankResponse.Usage != nil:
 		input.usage = result.RerankResponse.Usage
+
+	case result.SearchResponse != nil && result.SearchResponse.Usage != nil:
+		input.searchUsage = result.SearchResponse.Usage
 
 	case result.SpeechResponse != nil && result.SpeechResponse.Usage != nil:
 		input.usage = speechUsageToBifrostUsage(result.SpeechResponse.Usage)
@@ -532,6 +542,25 @@ func computeRerankCost(pricing *configstoreTables.TableModelPricing, usage *sche
 	}
 
 	return inputCost + outputCost + searchCost
+}
+
+// computeSearchCost handles search requests.
+func computeSearchCost(pricing *configstoreTables.TableModelPricing, usage *schemas.BifrostSearchUsage) float64 {
+	if usage == nil {
+		return 0
+	}
+
+	cost := 0.0
+	if pricing.SearchCostPerRequest != nil {
+		cost += *pricing.SearchCostPerRequest
+	}
+	if pricing.SearchCostPerResult != nil && usage.Results > 0 {
+		cost += float64(usage.Results) * *pricing.SearchCostPerResult
+	}
+	if pricing.SearchCostPerCredit != nil && usage.Credits != nil {
+		cost += *usage.Credits * *pricing.SearchCostPerCredit
+	}
+	return cost
 }
 
 // computeSpeechCost handles speech (TTS) requests.

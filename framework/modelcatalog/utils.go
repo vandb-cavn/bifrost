@@ -81,6 +81,8 @@ func normalizeRequestType(reqType schemas.RequestType) string {
 		baseType = "chat"
 	case schemas.ResponsesRequest, schemas.ResponsesStreamRequest, schemas.RealtimeRequest:
 		baseType = "responses"
+	case schemas.SearchRequest:
+		baseType = "search"
 	case schemas.EmbeddingRequest:
 		baseType = "embedding"
 	case schemas.RerankRequest:
@@ -152,16 +154,16 @@ func convertPricingDataToTableModelPricing(modelKey string, entry PricingEntry) 
 		Architecture:    entry.Architecture,
 
 		// Costs - Text
-		InputCostPerToken:                 entry.InputCostPerToken,
-		OutputCostPerToken:                entry.OutputCostPerToken,
-		InputCostPerTokenBatches:          entry.InputCostPerTokenBatches,
-		OutputCostPerTokenBatches:         entry.OutputCostPerTokenBatches,
-		InputCostPerTokenPriority:         entry.InputCostPerTokenPriority,
-		OutputCostPerTokenPriority:        entry.OutputCostPerTokenPriority,
-		InputCostPerTokenFlex:             entry.InputCostPerTokenFlex,
-		OutputCostPerTokenFlex:            entry.OutputCostPerTokenFlex,
-		InputCostPerTokenAbove200kTokens:         entry.InputCostPerTokenAbove200kTokens,
-		InputCostPerTokenAbove200kTokensPriority: entry.InputCostPerTokenAbove200kTokensPriority,
+		InputCostPerToken:                         entry.InputCostPerToken,
+		OutputCostPerToken:                        entry.OutputCostPerToken,
+		InputCostPerTokenBatches:                  entry.InputCostPerTokenBatches,
+		OutputCostPerTokenBatches:                 entry.OutputCostPerTokenBatches,
+		InputCostPerTokenPriority:                 entry.InputCostPerTokenPriority,
+		OutputCostPerTokenPriority:                entry.OutputCostPerTokenPriority,
+		InputCostPerTokenFlex:                     entry.InputCostPerTokenFlex,
+		OutputCostPerTokenFlex:                    entry.OutputCostPerTokenFlex,
+		InputCostPerTokenAbove200kTokens:          entry.InputCostPerTokenAbove200kTokens,
+		InputCostPerTokenAbove200kTokensPriority:  entry.InputCostPerTokenAbove200kTokensPriority,
 		OutputCostPerTokenAbove200kTokens:         entry.OutputCostPerTokenAbove200kTokens,
 		OutputCostPerTokenAbove200kTokensPriority: entry.OutputCostPerTokenAbove200kTokensPriority,
 		// Costs - 272k Tier
@@ -224,6 +226,9 @@ func convertPricingDataToTableModelPricing(modelKey string, entry PricingEntry) 
 
 		// Costs - Other
 		SearchContextCostPerQuery:     entry.SearchContextCostPerQuery,
+		SearchCostPerRequest:          entry.SearchCostPerRequest,
+		SearchCostPerResult:           entry.SearchCostPerResult,
+		SearchCostPerCredit:           entry.SearchCostPerCredit,
 		CodeInterpreterCostPerSession: entry.CodeInterpreterCostPerSession,
 	}
 }
@@ -232,16 +237,16 @@ func convertPricingDataToTableModelPricing(modelKey string, entry PricingEntry) 
 func convertTableModelPricingToPricingData(pricing *configstoreTables.TableModelPricing) *PricingEntry {
 	options := PricingOptions{
 		// Costs - Text
-		InputCostPerToken:                 pricing.InputCostPerToken,
-		OutputCostPerToken:                pricing.OutputCostPerToken,
-		InputCostPerTokenBatches:          pricing.InputCostPerTokenBatches,
-		OutputCostPerTokenBatches:         pricing.OutputCostPerTokenBatches,
-		InputCostPerTokenPriority:         pricing.InputCostPerTokenPriority,
-		OutputCostPerTokenPriority:        pricing.OutputCostPerTokenPriority,
-		InputCostPerTokenFlex:             pricing.InputCostPerTokenFlex,
-		OutputCostPerTokenFlex:            pricing.OutputCostPerTokenFlex,
-		InputCostPerTokenAbove200kTokens:         pricing.InputCostPerTokenAbove200kTokens,
-		InputCostPerTokenAbove200kTokensPriority: pricing.InputCostPerTokenAbove200kTokensPriority,
+		InputCostPerToken:                         pricing.InputCostPerToken,
+		OutputCostPerToken:                        pricing.OutputCostPerToken,
+		InputCostPerTokenBatches:                  pricing.InputCostPerTokenBatches,
+		OutputCostPerTokenBatches:                 pricing.OutputCostPerTokenBatches,
+		InputCostPerTokenPriority:                 pricing.InputCostPerTokenPriority,
+		OutputCostPerTokenPriority:                pricing.OutputCostPerTokenPriority,
+		InputCostPerTokenFlex:                     pricing.InputCostPerTokenFlex,
+		OutputCostPerTokenFlex:                    pricing.OutputCostPerTokenFlex,
+		InputCostPerTokenAbove200kTokens:          pricing.InputCostPerTokenAbove200kTokens,
+		InputCostPerTokenAbove200kTokensPriority:  pricing.InputCostPerTokenAbove200kTokensPriority,
 		OutputCostPerTokenAbove200kTokens:         pricing.OutputCostPerTokenAbove200kTokens,
 		OutputCostPerTokenAbove200kTokensPriority: pricing.OutputCostPerTokenAbove200kTokensPriority,
 		// Costs - 272k Tier
@@ -304,6 +309,9 @@ func convertTableModelPricingToPricingData(pricing *configstoreTables.TableModel
 
 		// Costs - Other
 		SearchContextCostPerQuery:     pricing.SearchContextCostPerQuery,
+		SearchCostPerRequest:          pricing.SearchCostPerRequest,
+		SearchCostPerResult:           pricing.SearchCostPerResult,
+		SearchCostPerCredit:           pricing.SearchCostPerCredit,
 		CodeInterpreterCostPerSession: pricing.CodeInterpreterCostPerSession,
 	}
 	return &PricingEntry{

@@ -77,6 +77,21 @@ func makeRerankResponse(provider schemas.ModelProvider, model string, usage *sch
 	}
 }
 
+// makeSearchResponse builds a minimal BifrostResponse for a search request.
+func makeSearchResponse(provider schemas.ModelProvider, model string, usage *schemas.BifrostSearchUsage) *schemas.BifrostResponse {
+	return &schemas.BifrostResponse{
+		SearchResponse: &schemas.BifrostSearchResponse{
+			Usage: usage,
+			Model: model,
+			ExtraFields: schemas.BifrostResponseExtraFields{
+				RequestType:            schemas.SearchRequest,
+				Provider:               provider,
+				OriginalModelRequested: model,
+			},
+		},
+	}
+}
+
 // makeImageResponse builds a minimal BifrostResponse for an image generation request.
 func makeImageResponse(provider schemas.ModelProvider, model string, usage *schemas.ImageUsage) *schemas.BifrostResponse {
 	return &schemas.BifrostResponse{
@@ -357,6 +372,46 @@ func TestComputeRerankCost_WithSearchCost(t *testing.T) {
 func TestComputeRerankCost_NilUsage(t *testing.T) {
 	p := configstoreTables.TableModelPricing{InputCostPerToken: new(0.001)}
 	assert.Equal(t, 0.0, computeRerankCost(&p, nil, serviceTier{}))
+}
+
+// =========================================================================
+// 3b. computeSearchCost — unit tests
+// =========================================================================
+
+func TestComputeSearchCost_Basic(t *testing.T) {
+	p := configstoreTables.TableModelPricing{
+		SearchCostPerRequest: bifrost.Ptr(0.5),
+		SearchCostPerResult:  bifrost.Ptr(0.1),
+		SearchCostPerCredit:  bifrost.Ptr(0.25),
+	}
+	usage := &schemas.BifrostSearchUsage{
+		Results: 4,
+		Credits: bifrost.Ptr(2.0),
+	}
+	cost := computeSearchCost(&p, usage)
+	// 0.5 + (4 * 0.1) + (2 * 0.25) = 1.4
+	assert.InDelta(t, 1.4, cost, 1e-12)
+}
+
+func TestCalculateCost_SearchResponse(t *testing.T) {
+	mc := testCatalogWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("default", string(schemas.Exa), "search"): {
+			Model:                "default",
+			Provider:             string(schemas.Exa),
+			Mode:                 "search",
+			SearchCostPerRequest: bifrost.Ptr(0.5),
+			SearchCostPerResult:  bifrost.Ptr(0.1),
+			SearchCostPerCredit:  bifrost.Ptr(0.25),
+		},
+	})
+
+	resp := makeSearchResponse(schemas.Exa, "default", &schemas.BifrostSearchUsage{
+		Results: 4,
+		Credits: bifrost.Ptr(2.0),
+	})
+
+	cost := mc.CalculateCost(resp, nil)
+	assert.InDelta(t, 1.4, cost, 1e-12)
 }
 
 // =========================================================================

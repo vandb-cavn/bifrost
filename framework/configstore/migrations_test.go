@@ -46,6 +46,17 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// legacyTableModelPricing simulates an older governance_model_pricing schema
+// before the search pricing columns were added.
+type legacyTableModelPricing struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement"`
+	Model    string `gorm:"type:varchar(255);not null;uniqueIndex:idx_model_provider_mode"`
+	Provider string `gorm:"type:varchar(50);not null;uniqueIndex:idx_model_provider_mode"`
+	Mode     string `gorm:"type:varchar(50);not null;uniqueIndex:idx_model_provider_mode"`
+}
+
+func (legacyTableModelPricing) TableName() string { return "governance_model_pricing" }
+
 // captureLogOutput captures log output during a function execution
 func captureLogOutput(fn func()) string {
 	var buf bytes.Buffer
@@ -1163,6 +1174,33 @@ func TestTriggerMigrations_FreshDB(t *testing.T) {
 	}
 }
 
+func TestTriggerMigrations_AddSearchPricingColumns(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, db.AutoMigrate(&legacyTableModelPricing{}))
+
+	for _, column := range []string{
+		"search_cost_per_request",
+		"search_cost_per_result",
+		"search_cost_per_credit",
+	} {
+		assert.False(t, db.Migrator().HasColumn(&tables.TableModelPricing{}, column), "legacy DB should start without %s", column)
+	}
+
+	require.NoError(t, triggerMigrations(context.Background(), db))
+
+	for _, column := range []string{
+		"search_cost_per_request",
+		"search_cost_per_result",
+		"search_cost_per_credit",
+	} {
+		assert.True(t, db.Migrator().HasColumn(&tables.TableModelPricing{}, column), "migration should add %s", column)
+	}
+}
+
 func TestTriggerMigrations_Idempotent(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
@@ -2001,4 +2039,3 @@ func TestMigrationReplaceEnableLiteLLMWithCompatColumns(t *testing.T) {
 	assert.False(t, rows[1].CompatConvertTextToChat, "row with litellm=false should have compat_convert_text_to_chat=false")
 	assert.False(t, rows[1].CompatShouldConvertParams, "compat_should_convert_params should default to false")
 }
-
