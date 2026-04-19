@@ -175,10 +175,63 @@ describe("importGuardrailQuery", () => {
 	});
 });
 
+describe("role-filtered message fields", () => {
+	it("serializes a user message contains rule", () => {
+		expect(
+			serializeGuardrailQuery({
+				combinator: "and",
+				rules: [{ field: "request_user_message", operator: "contains", value: "secret" }],
+			}),
+		).toBe('request.messages.exists(m, m.role == "user" && m.content.contains("secret"))');
+	});
+
+	it("serializes a system message equals rule", () => {
+		expect(
+			serializeGuardrailQuery({
+				combinator: "and",
+				rules: [{ field: "request_system_message", operator: "equals", value: "You are helpful" }],
+			}),
+		).toBe('request.messages.exists(m, m.role == "system" && m.content == "You are helpful")');
+	});
+
+	it("serializes an assistant message is_empty rule", () => {
+		expect(
+			serializeGuardrailQuery({
+				combinator: "and",
+				rules: [{ field: "request_assistant_message", operator: "is_empty" }],
+			}),
+		).toBe('request.messages.exists(m, m.role == "assistant" && m.content == "")');
+	});
+
+	it("imports a user message contains expression", () => {
+		expect(importGuardrailQuery('request.messages.exists(m, m.role == "user" && m.content.contains("secret"))')).toEqual({
+			combinator: "and",
+			rules: [{ field: "request_user_message", operator: "contains", value: "secret" }],
+		});
+	});
+
+	it("imports a system message starts_with expression", () => {
+		expect(importGuardrailQuery('request.messages.exists(m, m.role == "system" && m.content.startsWith("You"))')).toEqual({
+			combinator: "and",
+			rules: [{ field: "request_system_message", operator: "starts_with", value: "You" }],
+		});
+	});
+
+	it("imports an assistant message equals expression", () => {
+		expect(importGuardrailQuery('request.messages.exists(m, m.role == "assistant" && m.content == "ok")')).toEqual({
+			combinator: "and",
+			rules: [{ field: "request_assistant_message", operator: "equals", value: "ok" }],
+		});
+	});
+});
+
 describe("guardrail builder field compatibility", () => {
 	it("limits input builders to request fields", () => {
 		expect(getGuardrailBuilderFields("input").map((field) => field.name)).toEqual([
 			"request_message",
+			"request_user_message",
+			"request_system_message",
+			"request_assistant_message",
 			"request_model",
 		]);
 	});

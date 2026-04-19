@@ -1,5 +1,8 @@
 export type GuardrailBuilderField =
 	| "request_message"
+	| "request_user_message"
+	| "request_system_message"
+	| "request_assistant_message"
 	| "request_model"
 	| "response_content"
 	| "response_finish_reason";
@@ -25,7 +28,10 @@ export type GuardrailBuilderGroup = {
 };
 
 export const guardrailBuilderFields = [
-	{ name: "request_message", label: "Request message" },
+	{ name: "request_message", label: "Any message" },
+	{ name: "request_user_message", label: "User message" },
+	{ name: "request_system_message", label: "System message" },
+	{ name: "request_assistant_message", label: "Assistant message" },
 	{ name: "request_model", label: "Model" },
 	{ name: "response_content", label: "Response content" },
 	{ name: "response_finish_reason", label: "Finish reason" },
@@ -40,10 +46,17 @@ type GuardrailBuilderFieldDefinition = (typeof guardrailBuilderFields)[number];
 
 const allGuardrailBuilderFields: ReadonlyArray<GuardrailBuilderFieldDefinition> = guardrailBuilderFields;
 
+const MESSAGE_FIELDS: readonly GuardrailBuilderField[] = [
+	"request_message",
+	"request_user_message",
+	"request_system_message",
+	"request_assistant_message",
+];
+
 const allowedFieldsByApplyTo: Record<GuardrailBuilderApplyTo, readonly GuardrailBuilderField[]> = {
-	input: ["request_message", "request_model"],
-	output: ["request_message", "request_model", "response_content", "response_finish_reason"],
-	both: ["request_message", "request_model", "response_content", "response_finish_reason"],
+	input: [...MESSAGE_FIELDS, "request_model"],
+	output: [...MESSAGE_FIELDS, "request_model", "response_content", "response_finish_reason"],
+	both: [...MESSAGE_FIELDS, "request_model", "response_content", "response_finish_reason"],
 };
 
 function isGuardrailBuilderFieldAllowed(field: GuardrailBuilderField, applyTo: GuardrailBuilderApplyTo): boolean {
@@ -70,6 +83,9 @@ export function isGuardrailBuilderGroupCompatible(group: GuardrailBuilderGroup, 
 
 const fieldPathByName: Record<GuardrailBuilderField, string> = {
 	request_message: "request.messages.exists(m, m.content",
+	request_user_message: 'request.messages.exists(m, m.role == "user" && m.content',
+	request_system_message: 'request.messages.exists(m, m.role == "system" && m.content',
+	request_assistant_message: 'request.messages.exists(m, m.role == "assistant" && m.content',
 	request_model: "request.model",
 	response_content: "output.content",
 	response_finish_reason: "output.finish_reason",
@@ -81,9 +97,21 @@ const celMethodByOperator: Record<Exclude<GuardrailBuilderOperator, "equals" | "
 	ends_with: "endsWith",
 };
 
+const messageContentPattern = String.raw`(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))`;
+const roleFilteredMessagePattern = (role: string) =>
+	new RegExp(
+		String.raw`^request\.messages\.exists\(\s*m\s*,\s*m\.role\s*==\s*"${role}"\s*&&\s*m\.content${messageContentPattern}\s*\)$`,
+		"u",
+	);
+
 const fieldImportPatterns: Record<GuardrailBuilderField, RegExp> = {
-	request_message:
-		/^request\.messages\.exists\(\s*m\s*,\s*m\.content(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*\)$/u,
+	request_message: new RegExp(
+		String.raw`^request\.messages\.exists\(\s*m\s*,\s*m\.content${messageContentPattern}\s*\)$`,
+		"u",
+	),
+	request_user_message: roleFilteredMessagePattern("user"),
+	request_system_message: roleFilteredMessagePattern("system"),
+	request_assistant_message: roleFilteredMessagePattern("assistant"),
 	request_model: /^request\.model(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*$/u,
 	response_content: /^output\.content(?:\.(contains|startsWith|endsWith)\(("(?:[^"\\]|\\.)*")\)|\s*==\s*("(?:[^"\\]|\\.)*"))\s*$/u,
 	response_finish_reason:
@@ -94,10 +122,12 @@ function quoteCELString(value: string): string {
 	return JSON.stringify(value);
 }
 
+const MESSAGE_FIELD_SET = new Set<GuardrailBuilderField>(MESSAGE_FIELDS);
+
 function serializeRule(rule: GuardrailBuilderRule): string {
 	const fieldPath = fieldPathByName[rule.field];
 
-	if (rule.field === "request_message") {
+	if (MESSAGE_FIELD_SET.has(rule.field)) {
 		if (rule.operator === "is_empty") {
 			return `${fieldPath} == ""` + ")";
 		}
