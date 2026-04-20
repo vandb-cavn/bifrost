@@ -16,6 +16,8 @@ import {
 	GetPricingOverridesResponse,
 	GetProviderGovernanceResponse,
 	GetRateLimitsResponse,
+	GetUsersParams,
+	GetUsersResponse,
 	GetTeamsParams,
 	GetTeamsResponse,
 	GetUsageStatsResponse,
@@ -27,12 +29,15 @@ import {
 	PricingOverride,
 	RateLimit,
 	ResetUsageRequest,
+	CreateUserRequest,
+	GovernanceUser,
 	Team,
 	UpdateBudgetRequest,
 	UpdateCustomerRequest,
 	UpdateModelConfigRequest,
 	UpdateProviderGovernanceRequest,
 	UpdateRateLimitRequest,
+	UpdateUserRequest,
 	UpdateTeamRequest,
 	UpdateVirtualKeyRequest,
 	VirtualKey,
@@ -104,6 +109,45 @@ export const governanceApi = baseApi.injectEndpoints({
 				},
 			}),
 			providesTags: ["Teams"],
+		}),
+
+		// Users
+		getUsers: builder.query<GetUsersResponse, GetUsersParams | void>({
+			query: (params) => ({
+				url: "/governance/users",
+				params: {
+					...(params?.limit && { limit: params.limit }),
+					...(params?.offset !== undefined && { offset: params.offset }),
+					...(params?.search && { search: params.search }),
+				},
+			}),
+			providesTags: ["Users"],
+		}),
+
+		createUser: builder.mutation<{ user: GovernanceUser }, CreateUserRequest>({
+			query: (data) => ({
+				url: "/governance/users",
+				method: "POST",
+				body: data,
+			}),
+			invalidatesTags: ["Users"],
+		}),
+
+		updateUser: builder.mutation<{ user: GovernanceUser }, { id: string; data: UpdateUserRequest }>({
+			query: ({ id, data }) => ({
+				url: `/governance/users/${id}`,
+				method: "PUT",
+				body: data,
+			}),
+			invalidatesTags: ["Users"],
+		}),
+
+		deleteUser: builder.mutation<{ message: string }, string>({
+			query: (id) => ({
+				url: `/governance/users/${id}`,
+				method: "DELETE",
+			}),
+			invalidatesTags: ["Users"],
 		}),
 
 		getTeam: builder.query<{ team: Team }, string>({
@@ -784,6 +828,10 @@ export const {
 	useCreateTeamMutation,
 	useUpdateTeamMutation,
 	useDeleteTeamMutation,
+	useGetUsersQuery,
+	useCreateUserMutation,
+	useUpdateUserMutation,
+	useDeleteUserMutation,
 
 	// Customers
 	useGetCustomersQuery,
