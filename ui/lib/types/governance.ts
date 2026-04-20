@@ -64,6 +64,27 @@ export interface GovernanceUser {
 	updated_at: string;
 }
 
+export interface SSOConfig {
+	id: string;
+	provider: "okta" | "entra";
+	issuer_url: string;
+	client_id: string;
+	role_claim_key: string;
+	group_claim_key: string;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface CreateSSOConfigRequest {
+	provider: "okta" | "entra";
+	issuer_url: string;
+	client_id: string;
+	client_secret: string;
+	role_claim_key?: string;
+	group_claim_key?: string;
+}
+
 export interface DBKey {
 	key_id: string; // UUID identifier for the key
 	name: string; // Name of the key

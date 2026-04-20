@@ -2,6 +2,7 @@ import {
 	Budget,
 	CreateCustomerRequest,
 	CreateModelConfigRequest,
+	CreateSSOConfigRequest,
 	CreatePricingOverrideRequest,
 	UpdatePricingOverrideRequest,
 	CreateTeamRequest,
@@ -31,6 +32,7 @@ import {
 	ResetUsageRequest,
 	CreateUserRequest,
 	GovernanceUser,
+	SSOConfig,
 	Team,
 	UpdateBudgetRequest,
 	UpdateCustomerRequest,
@@ -148,6 +150,45 @@ export const governanceApi = baseApi.injectEndpoints({
 				method: "DELETE",
 			}),
 			invalidatesTags: ["Users"],
+		}),
+
+		// SSO configs
+		getSSOConfigs: builder.query<{ configs: SSOConfig[] }, void>({
+			query: () => "/governance/sso/configs",
+			providesTags: ["SSOConfigs"],
+		}),
+
+		createSSOConfig: builder.mutation<{ config: SSOConfig }, CreateSSOConfigRequest>({
+			query: (data) => ({
+				url: "/governance/sso/configs",
+				method: "POST",
+				body: data,
+			}),
+			invalidatesTags: ["SSOConfigs"],
+		}),
+
+		updateSSOConfig: builder.mutation<{ config: SSOConfig }, { id: string; data: Partial<SSOConfig> & { client_secret?: string } }>({
+			query: ({ id, data }) => ({
+				url: `/governance/sso/configs/${id}`,
+				method: "PUT",
+				body: data,
+			}),
+			invalidatesTags: ["SSOConfigs"],
+		}),
+
+		deleteSSOConfig: builder.mutation<{ message: string }, string>({
+			query: (id) => ({
+				url: `/governance/sso/configs/${id}`,
+				method: "DELETE",
+			}),
+			invalidatesTags: ["SSOConfigs"],
+		}),
+
+		testSSOConfig: builder.mutation<{ message: string }, string>({
+			query: (id) => ({
+				url: `/governance/sso/configs/${id}/test`,
+				method: "POST",
+			}),
 		}),
 
 		getTeam: builder.query<{ team: Team }, string>({
@@ -832,6 +873,13 @@ export const {
 	useCreateUserMutation,
 	useUpdateUserMutation,
 	useDeleteUserMutation,
+
+	// SSO configs
+	useGetSSOConfigsQuery,
+	useCreateSSOConfigMutation,
+	useUpdateSSOConfigMutation,
+	useDeleteSSOConfigMutation,
+	useTestSSOConfigMutation,
 
 	// Customers
 	useGetCustomersQuery,
