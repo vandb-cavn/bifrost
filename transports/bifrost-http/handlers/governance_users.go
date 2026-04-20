@@ -155,7 +155,7 @@ func (h *GovernanceUsersHandler) updateUser(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	if h.governanceSync != nil {
-		h.governanceSync.UpdateUserGovernanceInMemory(user.ID, nil, nil)
+		h.governanceSync.UpdateUserGovernanceInMemory(user.ID, user.Budget, user.RateLimit)
 	}
 	SendJSON(ctx, map[string]any{"user": user})
 }
