@@ -141,6 +141,10 @@ export default function SSOConfigTab() {
 
 	const configs = data?.configs ?? [];
 	const busy = isCreating || isUpdating || isDeleting || isTestingFromMutation;
+	const isInitialLoading = isLoading && !data;
+	const isRefreshing = isFetching && !isInitialLoading;
+	const issuerPlaceholder = createForm.provider === "entra" ? "https://login.microsoftonline.com/{tenant-id}/v2.0" : "https://your-org.okta.com";
+	const editIssuerPlaceholder = editForm.provider === "entra" ? "https://login.microsoftonline.com/{tenant-id}/v2.0" : "https://your-org.okta.com";
 
 	const handleCreate = async () => {
 		try {
@@ -252,6 +256,12 @@ export default function SSOConfigTab() {
 					<h2 className="text-lg font-semibold tracking-tight">SSO / IdP Settings</h2>
 					<p className="text-muted-foreground text-sm">Configure one or more identity providers. Only one provider can be active at a time.</p>
 				</div>
+				{isRefreshing && (
+					<div className="text-muted-foreground flex items-center gap-2 text-xs">
+						<Loader2 className="size-3.5 animate-spin" />
+						Refreshing
+					</div>
+				)}
 				<Button
 					type="button"
 					variant="outline"
@@ -271,7 +281,7 @@ export default function SSOConfigTab() {
 							<h3 className="font-medium">Add Provider</h3>
 							<p className="text-muted-foreground text-sm">Create a new Okta or Microsoft Entra configuration.</p>
 						</div>
-						<Badge variant="secondary">Read-only login button</Badge>
+						<Badge variant="secondary">Login button follows active config</Badge>
 					</div>
 
 					<div className="grid gap-4 md:grid-cols-2">
@@ -295,7 +305,7 @@ export default function SSOConfigTab() {
 							<Label htmlFor="sso-create-issuer">Issuer URL</Label>
 							<Input
 								id="sso-create-issuer"
-								placeholder="https://your-org.okta.com"
+								placeholder={issuerPlaceholder}
 								value={createForm.issuer_url}
 								onChange={(e) => setCreateForm((prev) => ({ ...prev, issuer_url: e.target.value }))}
 								disabled={!canManage}
@@ -372,7 +382,7 @@ export default function SSOConfigTab() {
 				</div>
 
 				<div className="space-y-3">
-					{isLoading || isFetching ? (
+					{isInitialLoading ? (
 						<div className="border-border bg-card rounded-lg border p-6">
 							<div className="text-muted-foreground flex items-center gap-2 text-sm">
 								<Loader2 className="size-4 animate-spin" />
@@ -431,6 +441,7 @@ export default function SSOConfigTab() {
 												<Label htmlFor={`sso-edit-issuer-${cfg.id}`}>Issuer URL</Label>
 												<Input
 													id={`sso-edit-issuer-${cfg.id}`}
+													placeholder={editIssuerPlaceholder}
 													value={editForm.issuer_url}
 													onChange={(e) => setEditForm((prev) => ({ ...prev, issuer_url: e.target.value }))}
 													disabled={!canManage}
@@ -537,7 +548,13 @@ export default function SSOConfigTab() {
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel>Cancel</AlertDialogCancel>
-						<AlertDialogAction onClick={handleConfirmDelete}>Delete</AlertDialogAction>
+						<AlertDialogAction
+							onClick={handleConfirmDelete}
+							disabled={isDeleting}
+							className="bg-red-600 hover:bg-red-700"
+						>
+							{isDeleting ? "Deleting..." : "Delete"}
+						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>
