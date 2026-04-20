@@ -4,9 +4,9 @@
 
 **Goal:** Unblock Teams UI (Phase 0), add persistent user management with per-user budget/rate limits, and enable Generic OIDC SSO login (Okta + Entra) with auto-provisioning.
 
-**Architecture:** Three sequential layers — (1) DB tables + migrations, (2) ConfigStore + HTTP handlers, (3) Frontend. SSO handler lives in transport alongside `SessionHandler`. Governance plugin is not touched. All new tables use `governance_` prefix.
+**Architecture:** Three sequential layers — (1) DB tables + migrations, (2) ConfigStore + HTTP handlers, (3) Frontend. SSO handler lives in transport alongside `SessionHandler`. The governance plugin's inference-time in-memory store is synced via a `UserGovernanceSync` interface passed to the users handler — the plugin is not modified, only called. All new tables use `governance_` prefix.
 
-**Tech Stack:** Go 1.23, fasthttp, GORM (SQLite dev / Postgres prod), React 18, RTK Query, TypeScript, `github.com/go-jose/go-jose/v3` for JWT/JWKS.
+**Tech Stack:** Go 1.26.2, fasthttp, GORM (SQLite dev / Postgres prod), React 18, RTK Query, TypeScript, `github.com/go-jose/go-jose/v3` for JWT/JWKS, OIDC Discovery for provider-agnostic endpoint resolution.
 
 ---
 
@@ -278,6 +278,7 @@ import "time"
 type GovernanceSSONoncesTable struct {
 	State        string    `gorm:"primaryKey;type:varchar(255)" json:"state"`
 	CodeVerifier string    `gorm:"type:text;not null" json:"code_verifier"`
+	Nonce        string    `gorm:"type:varchar(255);not null" json:"nonce"` // added to auth URL, verified in id_token
 	Provider     string    `gorm:"type:varchar(50);not null" json:"provider"`
 	ExpiresAt    time.Time `gorm:"index;not null" json:"expires_at"`
 }
@@ -827,8 +828,8 @@ In `framework/configstore/store.go`, add after the user management methods:
 	EnableSSOConfig(ctx context.Context, id string) error
 	DeleteSSOConfig(ctx context.Context, id string) error
 
-	// SSO nonce management (PKCE state)
-	CreateSSONonce(ctx context.Context, state, codeVerifier, provider string, expiresAt time.Time) error
+	// SSO nonce management (PKCE state + id_token nonce)
+	CreateSSONonce(ctx context.Context, state, codeVerifier, nonce, provider string, expiresAt time.Time) error
 	ConsumeAndDeleteSSONonce(ctx context.Context, state string) (*tables.GovernanceSSONoncesTable, error)
 	DeleteExpiredSSONonces(ctx context.Context) error
 ```
@@ -903,21 +904,25 @@ func (s *RDBConfigStore) DeleteSSOConfig(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *RDBConfigStore) CreateSSONonce(ctx context.Context, state, codeVerifier, provider string, expiresAt time.Time) error {
-	nonce := &tables.GovernanceSSONoncesTable{
+func (s *RDBConfigStore) CreateSSONonce(ctx context.Context, state, codeVerifier, nonce, provider string, expiresAt time.Time) error {
+	row := &tables.GovernanceSSONoncesTable{
 		State:        state,
 		CodeVerifier: codeVerifier,
+		Nonce:        nonce,
 		Provider:     provider,
 		ExpiresAt:    expiresAt,
 	}
-	return s.parseGormError(s.db.WithContext(ctx).Create(nonce).Error)
+	return s.parseGormError(s.db.WithContext(ctx).Create(row).Error)
 }
 
 // ConsumeAndDeleteSSONonce atomically reads and deletes a nonce (single-use).
+// Uses SELECT FOR UPDATE (Postgres) / exclusive transaction (SQLite) to prevent
+// concurrent callbacks from consuming the same nonce.
 func (s *RDBConfigStore) ConsumeAndDeleteSSONonce(ctx context.Context, state string) (*tables.GovernanceSSONoncesTable, error) {
 	var nonce tables.GovernanceSSONoncesTable
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.First(&nonce, "state = ? AND expires_at > ?", state, time.Now()).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&nonce, "state = ? AND expires_at > ?", state, time.Now()).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
@@ -985,12 +990,22 @@ import (
 	"github.com/google/uuid"
 )
 
-type GovernanceUsersHandler struct {
-	configStore configstore.ConfigStore
+// UserGovernanceSync is the subset of the governance plugin's in-memory store
+// interface needed to keep inference-time quota tracking in sync with DB writes.
+// The governance plugin already implements this; pass it when available.
+type UserGovernanceSync interface {
+	CreateUserGovernanceInMemory(userID string, budget *tables.TableBudget, rateLimit *tables.TableRateLimit)
+	UpdateUserGovernanceInMemory(userID string, budget *tables.TableBudget, rateLimit *tables.TableRateLimit)
+	DeleteUserGovernanceInMemory(userID string)
 }
 
-func NewGovernanceUsersHandler(cs configstore.ConfigStore) *GovernanceUsersHandler {
-	return &GovernanceUsersHandler{configStore: cs}
+type GovernanceUsersHandler struct {
+	configStore   configstore.ConfigStore
+	governanceSync UserGovernanceSync // nil when governance plugin not loaded
+}
+
+func NewGovernanceUsersHandler(cs configstore.ConfigStore, govSync UserGovernanceSync) *GovernanceUsersHandler {
+	return &GovernanceUsersHandler{configStore: cs, governanceSync: govSync}
 }
 
 func (h *GovernanceUsersHandler) RegisterRoutes(r *router.Router, middlewares ...schemas.Middleware) {
@@ -1053,6 +1068,10 @@ func (h *GovernanceUsersHandler) createUser(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusInternalServerError, err.Error())
 		return
 	}
+	// Sync governance plugin in-memory store so inference-time quota checks are immediate
+	if h.governanceSync != nil {
+		h.governanceSync.CreateUserGovernanceInMemory(user.ID, nil, nil)
+	}
 	SendJSONWithStatus(ctx, fasthttp.StatusCreated, map[string]any{"user": user})
 }
 
@@ -1090,6 +1109,9 @@ func (h *GovernanceUsersHandler) updateUser(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.governanceSync != nil {
+		h.governanceSync.UpdateUserGovernanceInMemory(user.ID, nil, nil)
+	}
 	SendJSON(ctx, map[string]any{"user": user})
 }
 
@@ -1102,6 +1124,9 @@ func (h *GovernanceUsersHandler) deleteUser(ctx *fasthttp.RequestCtx) {
 		}
 		SendError(ctx, fasthttp.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.governanceSync != nil {
+		h.governanceSync.DeleteUserGovernanceInMemory(id)
 	}
 	SendJSON(ctx, map[string]any{"message": "user deleted"})
 }
@@ -1120,9 +1145,20 @@ In `transports/bifrost-http/server/server.go`, find where `sessionHandler.Regist
 
 ```go
 if s.Config.ConfigStore != nil {
-    usersHandler := handlers.NewGovernanceUsersHandler(s.Config.ConfigStore)
+    // Pass governance plugin's in-memory store if the governance plugin is loaded.
+    // Look up the plugin by name in s.Config.Plugins (the plugin registry).
+    // The governance plugin implements handlers.UserGovernanceSync directly.
+    var govSync handlers.UserGovernanceSync
+    if govPlugin := s.Config.GetPlugin(governance.PluginName); govPlugin != nil {
+        if gs, ok := govPlugin.(handlers.UserGovernanceSync); ok {
+            govSync = gs
+        }
+    }
+    usersHandler := handlers.NewGovernanceUsersHandler(s.Config.ConfigStore, govSync)
     usersHandler.RegisterRoutes(s.Router, middlewares...)
 }
+
+> **Note:** Check the exact method name on `lib.Config` to retrieve a registered plugin by name (search for `GetPlugin` or iterate `s.Config.Plugins`). If it doesn't exist, add a helper or iterate the slice inline.
 ```
 
 - [ ] **Step 3: Verify compilation**
@@ -1403,18 +1439,31 @@ type jwksCacheEntry struct {
 	fetchedAt time.Time
 }
 
-type SSOHandler struct {
-	configStore configstore.ConfigStore
-	jwksMu      sync.RWMutex
-	jwksCache   map[string]*jwksCacheEntry // keyed by issuer_url
-	callbackURL string                     // e.g. "https://bifrost.example.com/api/sso/callback"
+type oidcDiscovery struct {
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	JwksURI               string `json:"jwks_uri"`
+	Issuer                string `json:"issuer"`
 }
 
-func NewSSOHandler(cs configstore.ConfigStore, callbackURL string) *SSOHandler {
+type discoveryCacheEntry struct {
+	doc       oidcDiscovery
+	fetchedAt time.Time
+}
+
+type SSOHandler struct {
+	configStore   configstore.ConfigStore
+	jwksMu        sync.RWMutex
+	jwksCache     map[string]*jwksCacheEntry     // keyed by jwks_uri
+	discoveryMu   sync.RWMutex
+	discoveryCache map[string]*discoveryCacheEntry // keyed by issuer_url
+}
+
+func NewSSOHandler(cs configstore.ConfigStore) *SSOHandler {
 	h := &SSOHandler{
-		configStore: cs,
-		jwksCache:   make(map[string]*jwksCacheEntry),
-		callbackURL: callbackURL,
+		configStore:    cs,
+		jwksCache:      make(map[string]*jwksCacheEntry),
+		discoveryCache: make(map[string]*discoveryCacheEntry),
 	}
 	// Start background nonce cleanup
 	go func() {
@@ -1439,6 +1488,40 @@ func (h *SSOHandler) RegisterRoutes(r *router.Router, middlewares ...schemas.Mid
 	r.POST("/api/governance/sso/configs/{id}/test", lib.ChainMiddlewares(h.testConfig, middlewares...))
 }
 
+// fetchOIDCDiscovery fetches and caches the OIDC provider metadata document.
+// Uses the standardized /.well-known/openid-configuration endpoint (RFC 8414).
+func (h *SSOHandler) fetchOIDCDiscovery(issuerURL string) (*oidcDiscovery, error) {
+	h.discoveryMu.RLock()
+	entry := h.discoveryCache[issuerURL]
+	h.discoveryMu.RUnlock()
+
+	if entry != nil && time.Since(entry.fetchedAt) < jwksTTL {
+		return &entry.doc, nil
+	}
+
+	discoveryURL := strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
+	resp, err := safeHTTPClient.Get(discoveryURL)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC discovery failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+
+	var doc oidcDiscovery
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("OIDC discovery parse failed: %w", err)
+	}
+	if doc.AuthorizationEndpoint == "" || doc.TokenEndpoint == "" {
+		return nil, fmt.Errorf("OIDC discovery missing required endpoints")
+	}
+
+	h.discoveryMu.Lock()
+	h.discoveryCache[issuerURL] = &discoveryCacheEntry{doc: doc, fetchedAt: time.Now()}
+	h.discoveryMu.Unlock()
+
+	return &doc, nil
+}
+
 // --- Initiate PKCE flow ---
 
 func (h *SSOHandler) initiate(ctx *fasthttp.RequestCtx) {
@@ -1452,6 +1535,12 @@ func (h *SSOHandler) initiate(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	discovery, err := h.fetchOIDCDiscovery(cfg.IssuerURL)
+	if err != nil {
+		SendError(ctx, fasthttp.StatusBadGateway, fmt.Sprintf("OIDC discovery failed: %v", err))
+		return
+	}
+
 	state, err := generateState()
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, "failed to generate state")
@@ -1462,19 +1551,32 @@ func (h *SSOHandler) initiate(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusInternalServerError, "failed to generate code verifier")
 		return
 	}
+	nonce, err := generateState() // reuse same random-bytes function for nonce
+	if err != nil {
+		SendError(ctx, fasthttp.StatusInternalServerError, "failed to generate nonce")
+		return
+	}
 	challenge := codeChallenge(verifier)
 
-	if err := h.configStore.CreateSSONonce(ctx, state, verifier, cfg.Provider, time.Now().Add(10*time.Minute)); err != nil {
+	// Derive callback URL from request (same pattern as oauth2_metadata.go)
+	scheme := "https"
+	if string(ctx.URI().Scheme()) == "http" {
+		scheme = "http"
+	}
+	callbackURL := fmt.Sprintf("%s://%s/api/sso/callback", scheme, ctx.Host())
+
+	if err := h.configStore.CreateSSONonce(ctx, state, verifier, nonce, cfg.Provider, time.Now().Add(10*time.Minute)); err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, "failed to store nonce")
 		return
 	}
 
 	authURL := fmt.Sprintf(
-		"%s/oauth/v2/authorize?response_type=code&client_id=%s&redirect_uri=%s&scope=openid%%20profile%%20email&state=%s&code_challenge=%s&code_challenge_method=S256",
-		strings.TrimRight(cfg.IssuerURL, "/"),
+		"%s?response_type=code&client_id=%s&redirect_uri=%s&scope=openid%%20profile%%20email&state=%s&nonce=%s&code_challenge=%s&code_challenge_method=S256",
+		discovery.AuthorizationEndpoint,
 		url.QueryEscape(cfg.ClientID),
-		url.QueryEscape(h.callbackURL),
+		url.QueryEscape(callbackURL),
 		url.QueryEscape(state),
+		url.QueryEscape(nonce),
 		url.QueryEscape(challenge),
 	)
 	ctx.Redirect(authURL, fasthttp.StatusFound)
@@ -1502,7 +1604,13 @@ func (h *SSOHandler) callback(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	claims, err := h.exchangeAndVerify(ctx, cfg, code, nonce.CodeVerifier)
+	scheme := "https"
+	if string(ctx.URI().Scheme()) == "http" {
+		scheme = "http"
+	}
+	callbackURL := fmt.Sprintf("%s://%s/api/sso/callback", scheme, ctx.Host())
+
+	claims, err := h.exchangeAndVerify(ctx, cfg, code, nonce.CodeVerifier, callbackURL, nonce.Nonce)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusUnauthorized, fmt.Sprintf("token verification failed: %v", err))
 		return
@@ -1543,14 +1651,18 @@ func (h *SSOHandler) callback(ctx *fasthttp.RequestCtx) {
 }
 
 // exchangeAndVerify exchanges auth code for tokens and verifies the id_token.
-func (h *SSOHandler) exchangeAndVerify(ctx context.Context, cfg *tables.GovernanceSSOConfigsTable, code, verifier string) (map[string]any, error) {
-	tokenURL := strings.TrimRight(cfg.IssuerURL, "/") + "/oauth/v2/token"
-	resp, err := safeHTTPClient.PostForm(tokenURL, url.Values{
+func (h *SSOHandler) exchangeAndVerify(ctx context.Context, cfg *tables.GovernanceSSOConfigsTable, code, verifier, callbackURL, expectedNonce string) (map[string]any, error) {
+	// Resolve token endpoint via OIDC Discovery — never hardcode provider paths
+	discovery, err := h.fetchOIDCDiscovery(cfg.IssuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC discovery failed: %w", err)
+	}
+	resp, err := safeHTTPClient.PostForm(discovery.TokenEndpoint, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"client_id":     {cfg.ClientID},
 		"client_secret": {cfg.ClientSecret},
-		"redirect_uri":  {h.callbackURL},
+		"redirect_uri":  {callbackURL},
 		"code_verifier": {verifier},
 	})
 	if err != nil {
@@ -1566,7 +1678,7 @@ func (h *SSOHandler) exchangeAndVerify(ctx context.Context, cfg *tables.Governan
 		return nil, fmt.Errorf("no id_token in response")
 	}
 
-	keys, err := h.fetchJWKS(cfg.IssuerURL)
+	keys, err := h.fetchJWKS(discovery.JwksURI)
 	if err != nil {
 		return nil, fmt.Errorf("JWKS fetch failed: %w", err)
 	}
@@ -1586,9 +1698,9 @@ func (h *SSOHandler) exchangeAndVerify(ctx context.Context, cfg *tables.Governan
 		return nil, fmt.Errorf("JWT signature verification failed")
 	}
 
-	// Verify standard claims
-	if iss, _ := claims["iss"].(string); !strings.HasPrefix(iss, cfg.IssuerURL) {
-		return nil, fmt.Errorf("issuer mismatch: got %s", iss)
+	// Verify standard claims (exact equality, not prefix — OIDC spec §2)
+	if iss, _ := claims["iss"].(string); iss != discovery.Issuer {
+		return nil, fmt.Errorf("issuer mismatch: got %q, want %q", iss, discovery.Issuer)
 	}
 	if aud, ok := claims["aud"].(string); ok && aud != cfg.ClientID {
 		return nil, fmt.Errorf("audience mismatch")
@@ -1598,12 +1710,16 @@ func (h *SSOHandler) exchangeAndVerify(ctx context.Context, cfg *tables.Governan
 			return nil, fmt.Errorf("token expired")
 		}
 	}
+	// Verify nonce — prevents id_token replay attacks
+	if nonce, _ := claims["nonce"].(string); nonce != expectedNonce {
+		return nil, fmt.Errorf("nonce mismatch")
+	}
 	return claims, nil
 }
 
-func (h *SSOHandler) fetchJWKS(issuerURL string) ([]jose.JSONWebKey, error) {
-	jwksURI := strings.TrimRight(issuerURL, "/") + "/.well-known/jwks.json"
-
+// fetchJWKS fetches and caches the JWKS from the URI returned by OIDC Discovery.
+// The jwksURI parameter must come from the discovery document, not be constructed manually.
+func (h *SSOHandler) fetchJWKS(jwksURI string) ([]jose.JSONWebKey, error) {
 	h.jwksMu.RLock()
 	entry := h.jwksCache[jwksURI]
 	h.jwksMu.RUnlock()
@@ -1848,8 +1964,8 @@ Find where `sessionHandler.RegisterRoutes` is called and add nearby:
 
 ```go
 if s.Config.ConfigStore != nil {
-    callbackURL := s.Config.ClientConfig.ExternalURL + "/api/sso/callback" // adjust field name if different
-    ssoHandler := handlers.NewSSOHandler(s.Config.ConfigStore, callbackURL)
+    // callbackURL is derived at request time from ctx.Host() — no config field needed
+    ssoHandler := handlers.NewSSOHandler(s.Config.ConfigStore)
     ssoHandler.RegisterRoutes(s.Router, middlewares...)
 }
 ```
@@ -1914,11 +2030,15 @@ export interface CreateUserRequest {
   email: string;
   name: string;
   team_id?: string;
+  budget_id?: string;
+  rate_limit_id?: string;
 }
 
 export interface UpdateUserRequest {
   name?: string;
   team_id?: string | null;
+  budget_id?: string | null;
+  rate_limit_id?: string | null;
 }
 ```
 
@@ -1971,7 +2091,128 @@ export const { useGetUsersQuery, useCreateUserMutation, useUpdateUserMutation, u
 cat ui/app/workspace/governance/users/page.tsx
 ```
 
-- [ ] **Step 5: Replace the users page**
+- [ ] **Step 5: Create the UserDialog component**
+
+Create `ui/app/workspace/governance/views/userDialog.tsx`:
+
+```tsx
+"use client";
+
+import { useState, useEffect } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toast } from "sonner";
+import { useCreateUserMutation, useUpdateUserMutation, useGetTeamsQuery } from "@/lib/store";
+import { GovernanceUser } from "@/lib/types/governance";
+
+interface UserDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  user?: GovernanceUser | null; // null = create mode
+}
+
+export default function UserDialog({ open, onOpenChange, user }: UserDialogProps) {
+  const isEdit = !!user;
+  const [createUser] = useCreateUserMutation();
+  const [updateUser] = useUpdateUserMutation();
+  const { data: teamsData } = useGetTeamsQuery();
+
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [teamId, setTeamId] = useState<string>("none");
+  const [loading, setLoading] = useState(false);
+
+  // Populate form when editing
+  useEffect(() => {
+    if (user) {
+      setEmail(user.email);
+      setName(user.name);
+      setTeamId(user.team_id ?? "none");
+    } else {
+      setEmail("");
+      setName("");
+      setTeamId("none");
+    }
+  }, [user, open]);
+
+  const handleSubmit = async () => {
+    if (!email) { toast.error("Email is required"); return; }
+    setLoading(true);
+    try {
+      if (isEdit && user) {
+        await updateUser({
+          id: user.id,
+          data: {
+            name,
+            team_id: teamId === "none" ? null : teamId,
+          },
+        }).unwrap();
+        toast.success("User updated");
+      } else {
+        await createUser({
+          email,
+          name,
+          team_id: teamId === "none" ? undefined : teamId,
+        }).unwrap();
+        toast.success("User created");
+      }
+      onOpenChange(false);
+    } catch (err: any) {
+      toast.error(err?.data?.error ?? "Operation failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Edit User" : "Add User"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Email</Label>
+            <Input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="user@example.com"
+              disabled={isEdit} // email is immutable after creation
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Name</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Team</Label>
+            <Select value={teamId} onValueChange={setTeamId}>
+              <SelectTrigger><SelectValue placeholder="No team" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No team</SelectItem>
+                {(teamsData?.teams ?? []).map((t) => (
+                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading ? "Saving..." : isEdit ? "Save" : "Create"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+- [ ] **Step 6: Replace the users page with full CRUD**
 
 ```tsx
 "use client";
@@ -1981,14 +2222,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Edit, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useGetUsersQuery, useDeleteUserMutation } from "@/lib/store";
 import { GovernanceUser } from "@/lib/types/governance";
+import UserDialog from "@/app/workspace/governance/views/userDialog";
 
 export default function GovernanceUsersPage() {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<GovernanceUser | null>(null);
   const limit = 20;
 
   const { data, isLoading } = useGetUsersQuery({ search, limit, offset });
@@ -2004,11 +2248,14 @@ export default function GovernanceUsersPage() {
     }
   };
 
+  const openCreate = () => { setEditingUser(null); setDialogOpen(true); };
+  const openEdit = (user: GovernanceUser) => { setEditingUser(user); setDialogOpen(true); };
+
   return (
     <div className="mx-auto w-full max-w-7xl p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Users</h1>
-        <Button>
+        <Button onClick={openCreate}>
           <Plus className="h-4 w-4 mr-2" />
           Add User
         </Button>
@@ -2050,7 +2297,10 @@ export default function GovernanceUsersPage() {
                 <TableCell className="text-muted-foreground text-sm">
                   {new Date(user.created_at).toLocaleDateString()}
                 </TableCell>
-                <TableCell>
+                <TableCell className="flex gap-1">
+                  <Button variant="ghost" size="icon" onClick={() => openEdit(user)}>
+                    <Edit className="h-4 w-4" />
+                  </Button>
                   <Button variant="ghost" size="icon" onClick={() => handleDelete(user)}>
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
@@ -2067,22 +2317,29 @@ export default function GovernanceUsersPage() {
           </TableBody>
         </Table>
       )}
+
+      <UserDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        user={editingUser}
+      />
     </div>
   );
 }
 ```
 
-- [ ] **Step 6: Verify page in browser**
+- [ ] **Step 7: Verify page in browser**
 
-Navigate to `/workspace/governance/users`. Confirm: table renders, search works, delete works.
+Navigate to `/workspace/governance/users`. Confirm: table renders, search works, "Add User" opens dialog, creating a user appears in list, edit dialog pre-populates, delete works.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add ui/lib/types/governance.ts \
         ui/lib/store/apis/governanceApi.ts \
-        ui/app/workspace/governance/users/page.tsx
-git commit -m "feat(ui): add Users governance page with list, search, delete"
+        ui/app/workspace/governance/users/page.tsx \
+        ui/app/workspace/governance/views/userDialog.tsx
+git commit -m "feat(ui): add Users governance page with list, search, create/edit dialog, delete"
 ```
 
 ---
@@ -2363,7 +2620,85 @@ export default function SSOConfigTab() {
 }
 ```
 
-- [ ] **Step 5: Add SSO button to login page**
+- [ ] **Step 5: Add edit form to ssoConfigTab**
+
+In `ssoConfigTab.tsx`, add edit state and an edit form that appears when clicking "Edit" on an existing config. Add after the existing state declarations:
+
+```tsx
+const [editingId, setEditingId] = useState<string | null>(null);
+const [editForm, setEditForm] = useState({
+  issuer_url: "", client_id: "", client_secret: "",
+  role_claim_key: "", group_claim_key: "",
+});
+
+const startEdit = (cfg: SSOConfig) => {
+  setEditingId(cfg.id);
+  setEditForm({ issuer_url: cfg.issuer_url, client_id: cfg.client_id, client_secret: "",
+    role_claim_key: cfg.role_claim_key, group_claim_key: cfg.group_claim_key });
+};
+
+const handleEdit = async () => {
+  if (!editingId) return;
+  try {
+    await updateConfig({ id: editingId, data: { ...editForm } }).unwrap();
+    toast.success("Config updated");
+    setEditingId(null);
+  } catch {
+    toast.error("Failed to update config");
+  }
+};
+```
+
+In the existing config card, add an "Edit" button alongside the existing controls:
+
+```tsx
+<Button variant="ghost" size="sm" onClick={() => startEdit(cfg)}>Edit</Button>
+```
+
+Below the card, add a conditional edit form that appears when `editingId === cfg.id`:
+
+```tsx
+{editingId === cfg.id && (
+  <div className="border rounded-lg p-4 space-y-4 mt-2 bg-muted/30">
+    <h4 className="font-medium text-sm">Edit Provider</h4>
+    <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-1.5">
+        <Label>Issuer URL</Label>
+        <Input value={editForm.issuer_url} onChange={(e) => setEditForm({ ...editForm, issuer_url: e.target.value })} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Client ID</Label>
+        <Input value={editForm.client_id} onChange={(e) => setEditForm({ ...editForm, client_id: e.target.value })} />
+      </div>
+      <div className="space-y-1.5 col-span-2">
+        <Label>Client Secret <span className="text-muted-foreground">(leave blank to keep existing)</span></Label>
+        <Input type="password" value={editForm.client_secret} onChange={(e) => setEditForm({ ...editForm, client_secret: e.target.value })} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Role Claim Key</Label>
+        <Input value={editForm.role_claim_key} onChange={(e) => setEditForm({ ...editForm, role_claim_key: e.target.value })} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Group Claim Key</Label>
+        <Input value={editForm.group_claim_key} onChange={(e) => setEditForm({ ...editForm, group_claim_key: e.target.value })} />
+      </div>
+    </div>
+    <div className="flex gap-2">
+      <Button onClick={handleEdit}>Save</Button>
+      <Button variant="outline" onClick={() => setEditingId(null)}>Cancel</Button>
+    </div>
+  </div>
+)}
+```
+
+> In `updateConfig`, strip `client_secret` from the update payload if it is an empty string (backend should ignore empty string and keep the existing secret). Add this guard in `handleEdit`:
+> ```ts
+> const payload = { ...editForm };
+> if (!payload.client_secret) delete payload.client_secret;
+> await updateConfig({ id: editingId, data: payload }).unwrap();
+> ```
+
+- [ ] **Step 6: Add SSO button to login page**
 
 First find the login page:
 
@@ -2371,13 +2706,13 @@ First find the login page:
 find ui/app -name "page.tsx" | xargs grep -l "login\|password\|Login" 2>/dev/null | head -5
 ```
 
-Then in that file, find where auth is checked and add the SSO button. The existing call to `is-auth-enabled` likely already exists — add `sso_enabled` to the destructure and render the button:
+Then in that file, find where auth is checked and add the SSO button. The existing call to `is-auth-enabled` already exists — add `sso_enabled` to the destructure and render the button:
 
 ```tsx
-// Find the existing fetch/query for is-auth-enabled and add sso_enabled
+// Add sso_enabled to the existing response destructure
 const { is_auth_enabled, has_valid_token, sso_enabled } = authStatus; // adjust to match existing code
 
-// Add this button below the existing login form or alongside it:
+// Add below the existing login form:
 {sso_enabled && (
   <Button
     variant="outline"
@@ -2389,20 +2724,22 @@ const { is_auth_enabled, has_valid_token, sso_enabled } = authStatus; // adjust 
 )}
 ```
 
-- [ ] **Step 6: Test in browser**
+- [ ] **Step 7: Test in browser**
 
 1. Navigate to `/workspace/scim` — verify tabbed layout, SSO and SCIM tabs present
 2. Add an Okta config, click "Test Connection"
-3. Navigate to login page — if no SSO config is enabled, button should be hidden; enable one and refresh — button should appear
+3. Click "Edit" on a config — edit form appears inline, save updates fields
+4. Enable a config — other configs disable
+5. Navigate to login page — SSO button hidden by default, appears after enabling a config
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add ui/app/workspace/scim/page.tsx \
         ui/app/workspace/scim/views/ssoConfigTab.tsx \
         ui/lib/types/governance.ts \
         ui/lib/store/apis/governanceApi.ts
-git commit -m "feat(ui): add SSO config tab to User Provisioning page and SSO login button"
+git commit -m "feat(ui): add SSO config tab with create/edit/delete/test and SSO login button"
 ```
 
 ---
@@ -2425,11 +2762,12 @@ git commit -m "feat(ui): add SSO config tab to User Provisioning page and SSO lo
 | SSRF guard on test-connection | Task 6 |
 | `sso_enabled` on `is-auth-enabled` response | Task 6 |
 | Single-SSO enforcement (EnableSSOConfig disables others) | Task 4 + 6 |
-| Users UI page | Task 7 |
-| SSO config UI (tabbed /workspace/scim) | Task 8 |
+| Governance in-memory sync on user CRUD | Task 5 (`UserGovernanceSync` interface + calls in create/update/delete handlers) |
+| Users UI page (list, create dialog, edit dialog, delete) | Task 7 |
+| SSO config UI (tabbed /workspace/scim, create/edit/delete/test) | Task 8 |
 | Login page SSO button (provider-agnostic `/api/sso/login`) | Task 8 |
 
-All spec requirements covered. No gaps.
+All spec requirements covered. **Explicitly deferred** (out of scope per user decision): budget/rate-limit assignment UI in UserDialog (team assignment is included; budget/rate-limit require a separate budget creation flow not yet specced).
 
 ### Type consistency check
 
