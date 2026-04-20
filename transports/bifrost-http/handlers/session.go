@@ -44,6 +44,7 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 	if h.configStore == nil {
 		SendJSON(ctx, map[string]any{
 			"is_auth_enabled": false,
+			"sso_enabled":     false,
 		})
 		return
 	}
@@ -53,10 +54,7 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	if authConfig == nil {
-		SendJSON(ctx, map[string]any{
-			"is_auth_enabled": false,
-		})
-		return
+		authConfig = &configstore.AuthConfig{}
 	}
 	// Check if the header has a token and is valid (Authorization header or cookie)
 	token := ""
@@ -73,9 +71,16 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 			hasValidToken = true
 		}
 	}
+	ssoEnabled := false
+	if h.configStore != nil {
+		if activeCfg, err := h.configStore.GetActiveSSOConfig(ctx); err == nil && activeCfg != nil {
+			ssoEnabled = true
+		}
+	}
 	SendJSON(ctx, map[string]any{
 		"is_auth_enabled": authConfig.IsEnabled,
 		"has_valid_token": hasValidToken,
+		"sso_enabled":     ssoEnabled,
 	})
 }
 
@@ -209,7 +214,7 @@ func (h *SessionHandler) issueWSTicket(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusServiceUnavailable, "WebSocket tickets are not available")
 		return
 	}
-	sessionToken,ok := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
+	sessionToken, ok := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
 	if !ok {
 		SendError(ctx, fasthttp.StatusUnauthorized, "Unauthorized")
 		return
