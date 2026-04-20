@@ -1741,6 +1741,16 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	configHandler := handlers.NewConfigHandler(callbacks, s.Config)
 	pluginsHandler := handlers.NewPluginsHandler(callbacks, s.Config.ConfigStore)
 	sessionHandler := handlers.NewSessionHandler(s.Config.ConfigStore, s.WSTicketStore)
+	var usersHandler *handlers.GovernanceUsersHandler
+	if s.Config != nil && s.Config.ConfigStore != nil {
+		var govSync handlers.UserGovernanceSync
+		if govPlugin, err := lib.FindPluginAs[governance.BaseGovernancePlugin](s.Config, governance.PluginName); err == nil {
+			if syncStore, ok := govPlugin.GetGovernanceStore().(handlers.UserGovernanceSync); ok {
+				govSync = syncStore
+			}
+		}
+		usersHandler = handlers.NewGovernanceUsersHandler(s.Config.ConfigStore, govSync)
+	}
 	promptsHandler := handlers.NewPromptsHandler(s.Config.ConfigStore, promptsReloader)
 	// Going ahead with API handlers
 	healthHandler.RegisterRoutes(s.Router, middlewares...)
@@ -1760,6 +1770,9 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	}
 	if sessionHandler != nil {
 		sessionHandler.RegisterRoutes(s.Router, middlewares...)
+	}
+	if usersHandler != nil {
+		usersHandler.RegisterRoutes(s.Router, middlewares...)
 	}
 	if promptsHandler != nil {
 		promptsHandler.RegisterRoutes(s.Router, middlewares...)

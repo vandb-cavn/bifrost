@@ -125,6 +125,15 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddProviderConfigBudgetRateLimit(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddGovernanceUsersTable(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationAddGovernanceSSOConfigsTable(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationAddGovernanceSSONoncesTable(ctx, db); err != nil {
+		return err
+	}
 	if err := migrationAddSessionsTable(ctx, db); err != nil {
 		return err
 	}
@@ -1181,6 +1190,96 @@ func migrationAddSessionsTable(ctx context.Context, db *gorm.DB) error {
 	err := m.Migrate()
 	if err != nil {
 		return fmt.Errorf("error while running db migration: %s", err.Error())
+	}
+	return nil
+}
+
+// migrationAddGovernanceUsersTable adds the governance_users table
+func migrationAddGovernanceUsersTable(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_governance_users_table",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if !migrator.HasTable(&tables.TableUser{}) {
+				if err := migrator.CreateTable(&tables.TableUser{}); err != nil {
+					return err
+				}
+			}
+			return tx.AutoMigrate(&tables.TableUser{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if err := migrator.DropTable(&tables.TableUser{}); err != nil {
+				return err
+			}
+			return nil
+		},
+	}})
+	err := m.Migrate()
+	if err != nil {
+		return fmt.Errorf("error while running governance users migration: %w", err)
+	}
+	return nil
+}
+
+// migrationAddGovernanceSSOConfigsTable adds the governance_sso_configs table
+func migrationAddGovernanceSSOConfigsTable(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_governance_sso_configs_table",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if !migrator.HasTable(&tables.TableGovernanceSSOConfig{}) {
+				if err := migrator.CreateTable(&tables.TableGovernanceSSOConfig{}); err != nil {
+					return err
+				}
+			}
+			return tx.AutoMigrate(&tables.TableGovernanceSSOConfig{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if err := migrator.DropTable(&tables.TableGovernanceSSOConfig{}); err != nil {
+				return err
+			}
+			return nil
+		},
+	}})
+	err := m.Migrate()
+	if err != nil {
+		return fmt.Errorf("error while running governance sso configs migration: %w", err)
+	}
+	return nil
+}
+
+// migrationAddGovernanceSSONoncesTable adds the governance_sso_nonces table
+func migrationAddGovernanceSSONoncesTable(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_governance_sso_nonces_table",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if !migrator.HasTable(&tables.TableGovernanceSSONonce{}) {
+				if err := migrator.CreateTable(&tables.TableGovernanceSSONonce{}); err != nil {
+					return err
+				}
+			}
+			return tx.AutoMigrate(&tables.TableGovernanceSSONonce{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if err := migrator.DropTable(&tables.TableGovernanceSSONonce{}); err != nil {
+				return err
+			}
+			return nil
+		},
+	}})
+	err := m.Migrate()
+	if err != nil {
+		return fmt.Errorf("error while running governance sso nonces migration: %w", err)
 	}
 	return nil
 }
