@@ -130,10 +130,11 @@ func (h *SessionHandler) login(ctx *fasthttp.RequestCtx) {
 	// Creating a new session
 	token := uuid.New().String()
 	session := &tables.SessionsTable{
-		Token:     token,
-		ExpiresAt: time.Now().Add(time.Hour * 24 * 30), // 30 days
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		Token:      token,
+		AuthMethod: "password",
+		ExpiresAt:  time.Now().Add(time.Hour * 24 * 30), // 30 days
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
 	err = h.configStore.CreateSession(ctx, session)
 	if err != nil {

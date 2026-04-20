@@ -137,6 +137,9 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddSessionsTable(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddSessionUserFields(ctx, db); err != nil {
+		return err
+	}
 	if err := migrationAddHeadersJSONColumnIntoMCPClient(ctx, db); err != nil {
 		return err
 	}
@@ -1190,6 +1193,67 @@ func migrationAddSessionsTable(ctx context.Context, db *gorm.DB) error {
 	err := m.Migrate()
 	if err != nil {
 		return fmt.Errorf("error while running db migration: %s", err.Error())
+	}
+	return nil
+}
+
+// migrationAddSessionUserFields adds user_id and auth_method columns to the sessions table.
+func migrationAddSessionUserFields(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_session_user_id_auth_method",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if !migrator.HasColumn(&tables.SessionsTable{}, "user_id") {
+				if err := migrator.AddColumn(&tables.SessionsTable{}, "UserID"); err != nil {
+					return err
+				}
+			}
+			if !migrator.HasColumn(&tables.SessionsTable{}, "auth_method") {
+				if err := migrator.AddColumn(&tables.SessionsTable{}, "AuthMethod"); err != nil {
+					return err
+				}
+			}
+			if !migrator.HasIndex(&tables.SessionsTable{}, "idx_sessions_user_id") {
+				if err := migrator.CreateIndex(&tables.SessionsTable{}, "UserID"); err != nil {
+					return err
+				}
+			}
+			if !migrator.HasConstraint(&tables.SessionsTable{}, "User") {
+				if err := migrator.CreateConstraint(&tables.SessionsTable{}, "User"); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			migrator := tx.Migrator()
+			if migrator.HasConstraint(&tables.SessionsTable{}, "User") {
+				if err := migrator.DropConstraint(&tables.SessionsTable{}, "User"); err != nil {
+					return err
+				}
+			}
+			if migrator.HasIndex(&tables.SessionsTable{}, "idx_sessions_user_id") {
+				if err := migrator.DropIndex(&tables.SessionsTable{}, "UserID"); err != nil {
+					return err
+				}
+			}
+			if migrator.HasColumn(&tables.SessionsTable{}, "auth_method") {
+				if err := migrator.DropColumn(&tables.SessionsTable{}, "auth_method"); err != nil {
+					return err
+				}
+			}
+			if migrator.HasColumn(&tables.SessionsTable{}, "user_id") {
+				if err := migrator.DropColumn(&tables.SessionsTable{}, "user_id"); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error while running session user fields migration: %w", err)
 	}
 	return nil
 }

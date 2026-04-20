@@ -588,10 +588,12 @@ func (h *SSOHandler) exchangeAndVerify(ctx context.Context, cfg *tables.TableGov
 	if !audienceMatches(claims["aud"], cfg.ClientID) {
 		return nil, fmt.Errorf("audience mismatch")
 	}
-	if exp, ok := claims["exp"].(float64); ok {
-		if time.Now().Unix() > int64(exp) {
-			return nil, fmt.Errorf("token expired")
-		}
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("missing exp claim")
+	}
+	if time.Now().Unix() > int64(exp) {
+		return nil, fmt.Errorf("token expired")
 	}
 	if nonce, _ := claims["nonce"].(string); nonce != expectedNonce {
 		return nil, fmt.Errorf("nonce mismatch")
@@ -620,10 +622,12 @@ func (h *SSOHandler) createSession(ctx context.Context, userID string) (*tables.
 	}
 	now := time.Now().UTC()
 	session := &tables.SessionsTable{
-		Token:     token,
-		ExpiresAt: now.Add(24 * time.Hour),
-		CreatedAt: now,
-		UpdatedAt: now,
+		Token:      token,
+		UserID:     &userID,
+		AuthMethod: "oidc",
+		ExpiresAt:  now.Add(24 * time.Hour),
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if err := h.configStore.CreateSession(ctx, session); err != nil {
 		return nil, err
