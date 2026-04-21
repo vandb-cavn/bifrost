@@ -192,8 +192,8 @@ func validateIssuerURLImpl(rawURL string) error {
 	}
 	for _, ipStr := range ips {
 		ip := net.ParseIP(ipStr)
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-			return fmt.Errorf("issuer URL resolves to private/loopback address")
+		if ip.IsLoopback() {
+			return fmt.Errorf("issuer URL must not resolve to a loopback address")
 		}
 	}
 	return nil
