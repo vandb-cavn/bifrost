@@ -2744,6 +2744,119 @@ git commit -m "feat(ui): add SSO config tab with create/edit/delete/test and SSO
 
 ---
 
+## Task 9: User Profile in Sidebar (SSO Session Identity)
+
+**Goal**: After SSO login, the sidebar shows the logged-in user's name/email via a popover, matching the existing SCIM OAuth UX.
+
+**Root cause**: The SSO callback sets a session cookie and redirects to `/workspace`, but never exposes user identity to the frontend. The sidebar reads `getUserInfo()` from localStorage, which is only populated by the SCIM OAuth flow — not SSO. There is no `GET /api/session/me` endpoint.
+
+### Steps
+
+- [ ] **Step 1: Add `GET /api/session/me` to SessionHandler**
+
+In `transports/bifrost-http/handlers/session.go`, add a new handler that reads the session token from cookie/header, looks up the session, fetches the user row, and returns `{id, name, email}`.
+
+Note: `session.UserID` is `*string` (defined in Task 2) — nil-check and dereference before use. Use the existing `GetUser` method from Task 3 (struct is `GovernanceUsersTable`, not `TableGovernanceUser`):
+
+```go
+// me handles GET /api/session/me - Returns current logged-in user identity
+func (h *SessionHandler) me(ctx *fasthttp.RequestCtx) {
+    token := ""
+    if authHeader := string(ctx.Request.Header.Peek("Authorization")); strings.HasPrefix(authHeader, "Bearer ") {
+        token = strings.TrimPrefix(authHeader, "Bearer ")
+    }
+    if token == "" {
+        token = string(ctx.Request.Header.Cookie("token"))
+    }
+    if token == "" {
+        SendError(ctx, fasthttp.StatusUnauthorized, "no session token")
+        return
+    }
+    session, err := h.configStore.GetSession(ctx, token)
+    if err != nil || session == nil || session.ExpiresAt.Before(time.Now()) {
+        SendError(ctx, fasthttp.StatusUnauthorized, "invalid or expired session")
+        return
+    }
+    if session.UserID == nil {
+        SendError(ctx, fasthttp.StatusUnauthorized, "session has no user")
+        return
+    }
+    user, err := h.configStore.GetUser(ctx, *session.UserID)
+    if err != nil || user == nil {
+        SendError(ctx, fasthttp.StatusNotFound, "user not found")
+        return
+    }
+    SendJSON(ctx, map[string]any{
+        "id":    user.ID,
+        "name":  user.Name,
+        "email": user.Email,
+    })
+}
+```
+
+Register in `RegisterRoutes`:
+```go
+r.GET("/api/session/me", lib.ChainMiddlewares(h.me, middlewares...))
+```
+
+- [ ] **Step 2: Add RTK Query endpoint `useGetSessionMeQuery`**
+
+In `ui/lib/store/apis/sessionApi.ts` (or equivalent), add:
+```ts
+getSessionMe: builder.query<{ id: string; name?: string; email?: string }, void>({
+    query: () => "/session/me",  // baseApi already includes /api prefix
+}),
+```
+
+Export `useGetSessionMeQuery` hook.
+
+- [ ] **Step 3: Populate userInfo in sidebar after SSO login**
+
+In `ui/components/sidebar.tsx`:
+
+1. Add import at the top (alongside existing store imports):
+```tsx
+import { useGetSessionMeQuery } from "@/lib/store";
+```
+
+2. Replace the `useEffect` that calls `getUserInfo()`:
+
+```tsx
+const { data: sessionMe } = useGetSessionMeQuery(undefined, { skip: !IS_ENTERPRISE });
+
+useEffect(() => {
+    if (IS_ENTERPRISE) {
+        const stored = getUserInfo();
+        if (stored) {
+            setUserInfo(stored);
+        } else if (sessionMe) {
+            // SSO login: no localStorage entry, use /api/session/me
+            setUserInfo({ id: sessionMe.id, name: sessionMe.name, email: sessionMe.email });
+        }
+    }
+}, [sessionMe]);
+```
+
+Note: pass `id` alongside `name`/`email` to satisfy the `UserInfo` interface. SCIM OAuth (localStorage) takes priority; SSO login falls back to the API.
+
+- [ ] **Step 4: Verify in browser**
+
+1. Enable auth, configure SSO
+2. Click "Sign in with SSO", complete Keycloak login
+3. Check sidebar bottom — user name/email popover should appear
+4. Click logout — popover should disappear
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add transports/bifrost-http/handlers/session.go \
+        ui/lib/store/apis/sessionApi.ts \
+        ui/components/sidebar.tsx
+git commit -m "feat(sso): expose session identity via /api/session/me and show user profile in sidebar"
+```
+
+---
+
 ## Self-Review
 
 ### Spec coverage

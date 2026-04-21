@@ -29,6 +29,13 @@ export const sessionApi = baseApi.injectEndpoints({
 				method: "GET",
 			}),
 		}),
+		// Get current user session info
+		getSessionMe: builder.query<{ id: string; name?: string; email?: string }, void>({
+			query: () => ({
+				url: "/session/me",
+				method: "GET",
+			}),
+		}),
 		// Login endpoint
 		login: builder.mutation<LoginResponse, LoginRequest>({
 			query: (credentials) => ({
@@ -59,4 +66,4 @@ export const sessionApi = baseApi.injectEndpoints({
 	}),
 });
 
-export const { useIsAuthEnabledQuery, useLoginMutation, useLogoutMutation } = sessionApi;
+export const { useIsAuthEnabledQuery, useLoginMutation, useLogoutMutation, useGetSessionMeQuery } = sessionApi;

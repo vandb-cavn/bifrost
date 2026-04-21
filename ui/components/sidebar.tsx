@@ -64,7 +64,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { IS_ENTERPRISE, TRIAL_EXPIRY } from "@/lib/constants/config";
-import { useGetCoreConfigQuery, useGetLatestReleaseQuery, useGetVersionQuery, useLogoutMutation } from "@/lib/store";
+import { useGetCoreConfigQuery, useGetLatestReleaseQuery, useGetSessionMeQuery, useGetVersionQuery, useLogoutMutation } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import type { UserInfo } from "@enterprise/lib/store/utils/tokenManager";
@@ -835,12 +835,19 @@ export default function AppSidebar() {
 	// Get user info from localStorage (for enterprise SCIM OAuth)
 	const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
+	const { data: sessionMe } = useGetSessionMeQuery(undefined, { skip: !IS_ENTERPRISE });
+
 	useEffect(() => {
 		if (IS_ENTERPRISE) {
-			const info = getUserInfo();
-			setUserInfo(info);
+			const stored = getUserInfo();
+			if (stored) {
+				setUserInfo(stored);
+			} else if (sessionMe) {
+				// SSO login: no localStorage entry, use /api/session/me
+				setUserInfo({ name: sessionMe.name, email: sessionMe.email });
+			}
 		}
-	}, []);
+	}, [sessionMe]);
 
 	const showNewReleaseBanner = useMemo(() => {
 		if (IS_ENTERPRISE) return false;
