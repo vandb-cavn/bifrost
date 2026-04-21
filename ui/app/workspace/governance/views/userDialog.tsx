@@ -74,12 +74,15 @@ const getRateLimitLabel = (rateLimit: RateLimit) => {
 
 function RolesSection({ userId, hasPermission }: { userId: string; hasPermission: boolean }) {
 	const { data: allRolesData } = useListRolesQuery();
-	const { data: userRolesData, refetch } = useGetUserRolesQuery(userId);
+	const { data: userRolesData, isLoading: rolesLoading, refetch } = useGetUserRolesQuery(userId);
 	const [assignRole, { isLoading: isAssigning }] = useAssignUserRoleMutation();
 	const [removeRole, { isLoading: isRemoving }] = useRemoveUserRoleMutation();
 
-	const userRoleIds = new Set((userRolesData?.roles ?? []).map((r) => r.id));
-	const assignableRoles = (allRolesData?.roles ?? []).filter((r) => !userRoleIds.has(r.id));
+	const userRoleIds = useMemo(() => new Set((userRolesData?.roles ?? []).map((r) => r.id)), [userRolesData]);
+	const assignableRoles = useMemo(
+		() => (allRolesData?.roles ?? []).filter((r) => !userRoleIds.has(r.id)),
+		[allRolesData, userRoleIds],
+	);
 
 	const handleAssign = async (roleId: string) => {
 		try {
@@ -102,24 +105,27 @@ function RolesSection({ userId, hasPermission }: { userId: string; hasPermission
 	return (
 		<div className="space-y-2">
 			<div className="flex flex-wrap gap-2">
-				{(userRolesData?.roles ?? []).map((role) => (
-					<Badge key={role.id} variant="secondary" className="flex items-center gap-1">
-						{role.name}
-						{hasPermission && (
-							<button
-								type="button"
-								onClick={() => handleRemove(role.id)}
-								disabled={isRemoving}
-								className="hover:text-destructive ml-1"
-								aria-label={`Remove role ${role.name}`}
-							>
-								<X className="h-3 w-3" />
-							</button>
-						)}
-					</Badge>
-				))}
-				{(userRolesData?.roles ?? []).length === 0 && (
+				{rolesLoading ? (
+					<span className="text-muted-foreground text-sm">Loading roles...</span>
+				) : (userRolesData?.roles ?? []).length === 0 ? (
 					<span className="text-muted-foreground text-sm">No roles assigned</span>
+				) : (
+					(userRolesData?.roles ?? []).map((role) => (
+						<Badge key={role.id} variant="secondary" className="flex items-center gap-1">
+							{role.name}
+							{hasPermission && (
+								<button
+									type="button"
+									onClick={() => handleRemove(role.id)}
+									disabled={isRemoving}
+									className="hover:text-destructive ml-1"
+									aria-label={`Remove role ${role.name}`}
+								>
+									<X className="h-3 w-3" />
+								</button>
+							)}
+						</Badge>
+					))
 				)}
 			</div>
 			{hasPermission && assignableRoles.length > 0 && (
