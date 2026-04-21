@@ -206,7 +206,9 @@ func safeConfigResponse(cfg *tables.TableGovernanceSSOConfig) map[string]any {
 	allowedGroups, err := cfg.GetAllowedGroups()
 	if err != nil {
 		logger.Error("sso: allowed_groups malformed in safeConfigResponse: %v", err)
-		allowedGroups = nil
+		allowedGroups = []string{} // not nil — keeps response type consistent
+	} else if allowedGroups == nil {
+		allowedGroups = []string{} // ensure it's an empty array, not null
 	}
 	return map[string]any{
 		"id":              cfg.ID,
@@ -324,8 +326,15 @@ func (h *SSOHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, "client_secret cannot be empty")
 		return
 	}
+	if allowedGroups, hasKey := updates["allowed_groups"]; hasKey {
+		if _, ok := allowedGroups.([]any); !ok {
+			SendError(ctx, fasthttp.StatusBadRequest, "allowed_groups must be an array")
+			return
+		}
+	}
 
 	enableRequested, enablePresent := updates["enabled"].(bool)
+
 	if enablePresent && enableRequested {
 		delete(updates, "enabled")
 		if err := h.configStore.EnableSSOConfig(ctx, id); err != nil {
@@ -493,6 +502,11 @@ func (h *SSOHandler) callback(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusUnauthorized, fmt.Sprintf("claim extraction failed: %v", err))
 		return
 	}
+	email = strings.TrimSpace(email)
+	if email == "" {
+		SendError(ctx, fasthttp.StatusUnauthorized, "missing email claim")
+		return
+	}
 
 	// Group filter: deny login if allowed_groups configured and user not in any.
 	// Fail-closed: if allowed_groups is set but malformed, deny login.
@@ -518,12 +532,6 @@ func (h *SSOHandler) callback(ctx *fasthttp.RequestCtx) {
 			SendError(ctx, fasthttp.StatusUnauthorized, "not authorized for this application")
 			return
 		}
-	}
-
-	email = strings.TrimSpace(email)
-	if email == "" {
-		SendError(ctx, fasthttp.StatusUnauthorized, "missing email claim")
-		return
 	}
 
 	user, err := h.configStore.UpsertUserByEmail(ctx, email, name, "oidc")

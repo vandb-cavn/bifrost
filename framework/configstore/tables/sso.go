@@ -58,6 +58,7 @@ func (c *TableGovernanceSSOConfig) SetAllowedGroups(groups []string) {
 		c.AllowedGroups = ""
 		return
 	}
+	// json.Marshal on []string cannot fail because strings are always marshalable
 	b, _ := json.Marshal(sanitized)
 	c.AllowedGroups = string(b)
 }

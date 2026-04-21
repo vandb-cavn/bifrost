@@ -7013,7 +7013,11 @@ func migrationAddSSOGroupFilter(ctx context.Context, db *gorm.DB) error {
 			}
 			return nil
 		},
-		Rollback: func(tx *gorm.DB) error { return nil },
+		Rollback: func(tx *gorm.DB) error {
+			// No-op rollback: forward-only migration. Dropping columns in production
+			// is destructive and risky, so we preserve it on rollback.
+			return nil
+		},
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running add_sso_group_filter_v1: %w", err)
