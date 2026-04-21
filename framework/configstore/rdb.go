@@ -185,6 +185,11 @@ func (s *RDBConfigStore) DB() *gorm.DB {
 	return s.db
 }
 
+// TestDB returns the raw DB handle — only for use in tests.
+func (s *RDBConfigStore) TestDB() *gorm.DB {
+	return s.db
+}
+
 // parseGormError parses GORM errors to provide user-friendly error messages.
 // Currently handles unique constraint violations and is designed to be extended
 // for other error types in the future (e.g., foreign key violations, not null constraints).

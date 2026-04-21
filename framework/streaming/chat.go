@@ -561,13 +561,13 @@ func (a *Accumulator) processChatStreamingResponse(ctx *schemas.BifrostContext, 
 			rawRequest = result.TextCompletionResponse.ExtraFields.RawRequest
 		}
 		return &ProcessedStreamResponse{
-			RequestID:  requestID,
-			StreamType: streamType,
-			Provider:   provider,
+			RequestID:      requestID,
+			StreamType:     streamType,
+			Provider:       provider,
 			RequestedModel: model,
 			ResolvedModel:  resolvedModel,
-			Data:       data,
-			RawRequest: &rawRequest,
+			Data:           data,
+			RawRequest:     &rawRequest,
 		}, nil
 	}
 	// Non-final chunk: skip expensive rebuild since no consumer uses intermediate data.

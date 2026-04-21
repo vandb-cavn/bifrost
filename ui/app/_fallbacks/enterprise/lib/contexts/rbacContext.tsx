@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext, useMemo } from "react";
+import { useGetMyPermissionsQuery } from "@/lib/store";
 
 // RBAC Resource Names (must match backend definitions)
 export enum RbacResource {
@@ -30,7 +31,6 @@ export enum RbacResource {
 	AccessProfiles = "AccessProfiles",
 }
 
-// RBAC Operation Names (must match backend definitions)
 export enum RbacOperation {
 	Read = "Read",
 	View = "View",
@@ -49,32 +49,48 @@ interface RbacContextType {
 
 const RbacContext = createContext<RbacContextType | null>(null);
 
-// Dummy provider that allows all permissions
 export function RbacProvider({ children }: { children: React.ReactNode }) {
+	const { data, isLoading, refetch } = useGetMyPermissionsQuery();
+
+	const permissions = useMemo<Record<string, Record<string, boolean>>>(() => {
+		if (!data) return {};
+		if (data.is_admin) {
+			// Legacy admin session: synthesize allow-all map so existing useRbac() calls work.
+			return {};
+		}
+		const map: Record<string, Record<string, boolean>> = {};
+		for (const p of data.permissions) {
+			if (!map[p.resource]) map[p.resource] = {};
+			map[p.resource][p.operation] = true;
+		}
+		return map;
+	}, [data]);
+
+	const isAllowed = useCallback(
+		(resource: RbacResource, operation: RbacOperation): boolean => {
+			if (!data) return false;
+			if (data.is_admin) return true;
+			return permissions[resource]?.[operation] ?? false;
+		},
+		[data, permissions],
+	);
+
 	return (
-		<RbacContext.Provider
-			value={{
-				isAllowed: () => true, // Always allow in OSS
-				permissions: {},
-				isLoading: false,
-				refetch: () => {},
-			}}
-		>
+		<RbacContext.Provider value={{ isAllowed, permissions, isLoading, refetch }}>
 			{children}
 		</RbacContext.Provider>
 	);
 }
 
-// Hook that always returns true (no restrictions in OSS)
 export function useRbac(resource: RbacResource, operation: RbacOperation): boolean {
-	return true;
+	const context = useContext(RbacContext);
+	if (!context) return true; // Outside provider: fail open (same as before)
+	return context.isAllowed(resource, operation);
 }
 
-// Hook to access full RBAC context
 export function useRbacContext() {
 	const context = useContext(RbacContext);
 	if (!context) {
-		// Return dummy values if used outside provider
 		return {
 			isAllowed: () => true,
 			permissions: {},

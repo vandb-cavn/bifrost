@@ -8,6 +8,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -411,6 +412,15 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 		return err
 	}
 	if err := migrationAddGuardrailProfileTimeout(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationAddGovernanceRBACTables(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationSeedSystemRoles(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationExpandPermissionCatalog(ctx, db); err != nil {
 		return err
 	}
 	return nil
@@ -6733,6 +6743,218 @@ func migrationAddGuardrailsTables(ctx context.Context, db *gorm.DB) error {
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running add_guardrails_tables migration: %w", err)
+	}
+	return nil
+}
+
+// migrationAddGovernanceRBACTables creates the four RBAC tables.
+func migrationAddGovernanceRBACTables(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_governance_rbac_tables",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			return tx.AutoMigrate(
+				&tables.TableRole{},
+				&tables.TablePermission{},
+				&tables.TableRolePermission{},
+				&tables.TableUserRole{},
+			)
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			return tx.Migrator().DropTable(
+				&tables.TableUserRole{},
+				&tables.TableRolePermission{},
+				&tables.TablePermission{},
+				&tables.TableRole{},
+			)
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_governance_rbac_tables migration: %w", err)
+	}
+	return nil
+}
+
+// migrationSeedSystemRoles seeds initial core resources and Admin, Developer, and Viewer system roles.
+func migrationSeedSystemRoles(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "seed_system_roles",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			now := time.Now().UTC()
+
+			// Seed initial core permissions
+			type perm struct{ resource, operation string }
+			allPerms := []perm{}
+			resources := []string{
+				"VirtualKeys", "ModelProvider", "GuardrailsConfig", "GuardrailRules",
+				"Plugins", "MCPGateway", "AdaptiveRouter", "Logs", "Observability",
+				"AuditLogs", "Cluster", "UserProvisioning", "Users", "Settings",
+			}
+			ops := []string{"View", "Create", "Update"}
+			for _, r := range resources {
+				for _, o := range ops {
+					allPerms = append(allPerms, perm{r, o})
+				}
+			}
+
+			permIDs := make(map[string]string) // "Resource:Operation" → id
+			for _, p := range allPerms {
+				id := strings.ToLower(p.resource) + "_" + strings.ToLower(p.operation)
+				permIDs[p.resource+":"+p.operation] = id
+				row := &tables.TablePermission{ID: id, Resource: p.resource, Operation: p.operation}
+				if err := tx.FirstOrCreate(row, "id = ?", id).Error; err != nil {
+					return fmt.Errorf("seed permission %s:%s: %w", p.resource, p.operation, err)
+				}
+			}
+
+			// Seed roles
+			roles := []tables.TableRole{
+				{ID: "system-admin", Name: "Admin", Description: "Full access to all resources", IsSystem: true, CreatedAt: now, UpdatedAt: now},
+				{ID: "system-developer", Name: "Developer", Description: "CRUD on technical resources, read-only on governance", IsSystem: true, CreatedAt: now, UpdatedAt: now},
+				{ID: "system-viewer", Name: "Viewer", Description: "Read-only access to all resources", IsSystem: true, CreatedAt: now, UpdatedAt: now},
+			}
+			for i := range roles {
+				if err := tx.FirstOrCreate(&roles[i], "id = ?", roles[i].ID).Error; err != nil {
+					return fmt.Errorf("seed role %s: %w", roles[i].Name, err)
+				}
+			}
+
+			// Developer extra permissions (beyond View-all)
+			developerExtras := map[string][]string{
+				"VirtualKeys":      {"Create", "Update"},
+				"ModelProvider":    {"Create"},
+				"GuardrailsConfig": {"Create", "Update"},
+				"GuardrailRules":   {"Create", "Update"},
+				"Plugins":          {"Create"},
+				"MCPGateway":       {"Create", "Update"},
+				"AdaptiveRouter":   {"Create", "Update"},
+				"Observability":    {"Create"},
+			}
+
+			// Build role → permission assignments
+			type rolePerms struct {
+				roleID string
+				keys   []string // "Resource:Operation"
+			}
+			assignments := []rolePerms{}
+
+			// Admin: all permissions
+			adminKeys := []string{}
+			for _, p := range allPerms {
+				adminKeys = append(adminKeys, p.resource+":"+p.operation)
+			}
+			assignments = append(assignments, rolePerms{"system-admin", adminKeys})
+
+			// Developer: View-all + extras
+			devKeys := []string{}
+			for _, r := range resources {
+				devKeys = append(devKeys, r+":View")
+			}
+			for resource, extraOps := range developerExtras {
+				for _, op := range extraOps {
+					devKeys = append(devKeys, resource+":"+op)
+				}
+			}
+			assignments = append(assignments, rolePerms{"system-developer", devKeys})
+
+			// Viewer: View-all
+			viewerKeys := []string{}
+			for _, r := range resources {
+				viewerKeys = append(viewerKeys, r+":View")
+			}
+			assignments = append(assignments, rolePerms{"system-viewer", viewerKeys})
+
+			// Insert role_permissions rows
+			for _, rp := range assignments {
+				for _, key := range rp.keys {
+					pid, ok := permIDs[key]
+					if !ok {
+						continue
+					}
+					row := &tables.TableRolePermission{RoleID: rp.roleID, PermissionID: pid}
+					if err := tx.FirstOrCreate(row, "role_id = ? AND permission_id = ?", rp.roleID, pid).Error; err != nil {
+						return fmt.Errorf("seed role_permission %s→%s: %w", rp.roleID, pid, err)
+					}
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := tx.Where("role_id IN ?", []string{"system-admin", "system-developer", "system-viewer"}).
+				Delete(&tables.TableRolePermission{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id IN ?", []string{"system-admin", "system-developer", "system-viewer"}).
+				Delete(&tables.TableRole{}).Error; err != nil {
+				return err
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running seed_system_roles migration: %w", err)
+	}
+	return nil
+}
+
+// migrationExpandPermissionCatalog seeds the full extended set of resources and operations
+// for both legacy admin sessions and future customized roles.
+func migrationExpandPermissionCatalog(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "expand_permission_catalog_v2",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+
+			// Seed full set of permissions: 22 resources × 5 operations
+			type perm struct{ resource, operation string }
+			allPerms := []perm{}
+			resources := []string{
+				"VirtualKeys", "ModelProvider", "GuardrailsConfig", "GuardrailsProviders",
+				"GuardrailRules", "Plugins", "MCPGateway", "AdaptiveRouter", "Logs",
+				"Observability", "AuditLogs", "Cluster", "UserProvisioning", "Users",
+				"Settings", "RBAC", "Governance", "RoutingRules", "PIIRedactor",
+				"PromptRepository", "PromptDeploymentStrategy", "AccessProfiles",
+			}
+			ops := []string{"View", "Create", "Update", "Delete", "Download"}
+			for _, r := range resources {
+				for _, o := range ops {
+					allPerms = append(allPerms, perm{r, o})
+				}
+			}
+
+			permIDs := make(map[string]string) // "Resource:Operation" → id
+			for _, p := range allPerms {
+				id := strings.ToLower(p.resource) + "_" + strings.ToLower(p.operation)
+				permIDs[p.resource+":"+p.operation] = id
+				row := &tables.TablePermission{ID: id, Resource: p.resource, Operation: p.operation}
+				if err := tx.FirstOrCreate(row, "id = ?", id).Error; err != nil {
+					return fmt.Errorf("seed expanded permission %s:%s: %w", p.resource, p.operation, err)
+				}
+			}
+
+			// Admin: give system-admin all new permissions
+			adminKeys := []string{}
+			for _, p := range allPerms {
+				adminKeys = append(adminKeys, p.resource+":"+p.operation)
+			}
+			for _, key := range adminKeys {
+				pid := permIDs[key]
+				row := &tables.TableRolePermission{RoleID: "system-admin", PermissionID: pid}
+				if err := tx.FirstOrCreate(row, "role_id = ? AND permission_id = ?", "system-admin", pid).Error; err != nil {
+					return fmt.Errorf("assign expanded perm system-admin→%s: %w", pid, err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil // irreversible addition of catalog entries
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running expand_permission_catalog_v2 migration: %w", err)
 	}
 	return nil
 }

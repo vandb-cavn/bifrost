@@ -43,6 +43,11 @@ import {
 	UpdateTeamRequest,
 	UpdateVirtualKeyRequest,
 	VirtualKey,
+	MyPermissionsResponse,
+	Permission,
+	Role,
+	SetRolePermissionsRequest,
+	AssignUserRoleRequest,
 } from "@/lib/types/governance";
 import { baseApi } from "./baseApi";
 
@@ -189,6 +194,73 @@ export const governanceApi = baseApi.injectEndpoints({
 				url: `/governance/sso/configs/${id}/test`,
 				method: "POST",
 			}),
+		}),
+
+		// RBAC
+		getMyPermissions: builder.query<MyPermissionsResponse, void>({
+			query: () => "/governance/rbac/my-permissions",
+			// No cache tag — always fresh on mount (RbacContext calls refetch on demand)
+		}),
+
+		listPermissions: builder.query<{ permissions: Permission[] }, void>({
+			query: () => "/governance/rbac/permissions",
+			providesTags: ["Roles"],
+		}),
+
+		listRoles: builder.query<{ roles: Role[] }, void>({
+			query: () => "/governance/rbac/roles",
+			providesTags: ["Roles"],
+		}),
+
+		getRole: builder.query<{ role: Role; permissions: Permission[] }, string>({
+			query: (id) => `/governance/rbac/roles/${id}`,
+			providesTags: (result, error, id) => [{ type: "Roles", id }],
+		}),
+
+		createRole: builder.mutation<{ role: Role }, { name: string; description?: string }>({
+			query: (data) => ({ url: "/governance/rbac/roles", method: "POST", body: data }),
+			invalidatesTags: ["Roles"],
+		}),
+
+		updateRole: builder.mutation<{ role: Role }, { id: string; data: Partial<Pick<Role, "name" | "description">> }>({
+			query: ({ id, data }) => ({ url: `/governance/rbac/roles/${id}`, method: "PUT", body: data }),
+			invalidatesTags: (result, error, { id }) => [{ type: "Roles", id }, "Roles"],
+		}),
+
+		deleteRole: builder.mutation<{ message: string }, string>({
+			query: (id) => ({ url: `/governance/rbac/roles/${id}`, method: "DELETE" }),
+			invalidatesTags: ["Roles"],
+		}),
+
+		setRolePermissions: builder.mutation<{ permissions: Permission[] }, { roleId: string; permissionIds: string[] }>({
+			query: ({ roleId, permissionIds }) => ({
+				url: `/governance/rbac/roles/${roleId}/permissions`,
+				method: "PUT",
+				body: { permission_ids: permissionIds },
+			}),
+			invalidatesTags: (result, error, { roleId }) => [{ type: "Roles", id: roleId }],
+		}),
+
+		assignUserRole: builder.mutation<{ message: string }, { userId: string; roleId: string }>({
+			query: ({ userId, roleId }) => ({
+				url: `/governance/rbac/users/${userId}/roles`,
+				method: "POST",
+				body: { role_id: roleId },
+			}),
+			invalidatesTags: ["Roles"],
+		}),
+
+		removeUserRole: builder.mutation<{ message: string }, { userId: string; roleId: string }>({
+			query: ({ userId, roleId }) => ({
+				url: `/governance/rbac/users/${userId}/roles/${roleId}`,
+				method: "DELETE",
+			}),
+			invalidatesTags: ["Roles"],
+		}),
+
+		getUserRoles: builder.query<{ roles: Role[] }, string>({
+			query: (userId) => `/governance/rbac/users/${userId}/roles`,
+			providesTags: ["Roles"],
 		}),
 
 		getTeam: builder.query<{ team: Team }, string>({
@@ -880,6 +952,19 @@ export const {
 	useUpdateSSOConfigMutation,
 	useDeleteSSOConfigMutation,
 	useTestSSOConfigMutation,
+
+	// RBAC
+	useGetMyPermissionsQuery,
+	useListPermissionsQuery,
+	useListRolesQuery,
+	useGetRoleQuery,
+	useCreateRoleMutation,
+	useUpdateRoleMutation,
+	useDeleteRoleMutation,
+	useSetRolePermissionsMutation,
+	useAssignUserRoleMutation,
+	useRemoveUserRoleMutation,
+	useGetUserRolesQuery,
 
 	// Customers
 	useGetCustomersQuery,

@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	defaultUploadWorkers         = 10
-	defaultUploadQueueSize       = 5000
-	maxContentSummaryBytes       = 2048
-	defaultMaxUploadQueueBytes   = 1 << 30 // 1 GiB
+	defaultUploadWorkers       = 10
+	defaultUploadQueueSize     = 5000
+	maxContentSummaryBytes     = 2048
+	defaultMaxUploadQueueBytes = 1 << 30 // 1 GiB
 )
 
 // uploadWork represents an async S3 upload job.
@@ -37,13 +37,13 @@ type uploadWork struct {
 //   - Intercepted: Create, CreateIfNotExists, BatchCreateIfNotExists, FindByID,
 //     Update, DeleteLog, DeleteLogs, DeleteLogsBatch, Close
 type HybridLogStore struct {
-	inner         LogStore
-	objects       objectstore.ObjectStore
-	prefix        string
-	logger        schemas.Logger
-	uploadQueue   chan *uploadWork
-	wg            sync.WaitGroup
-	closed        atomic.Bool
+	inner          LogStore
+	objects        objectstore.ObjectStore
+	prefix         string
+	logger         schemas.Logger
+	uploadQueue    chan *uploadWork
+	wg             sync.WaitGroup
+	closed         atomic.Bool
 	droppedUploads atomic.Int64
 	pendingBytes   atomic.Int64
 }

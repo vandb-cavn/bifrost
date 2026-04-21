@@ -1743,6 +1743,9 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	sessionHandler := handlers.NewSessionHandler(s.Config.ConfigStore, s.WSTicketStore)
 	var usersHandler *handlers.GovernanceUsersHandler
 	var ssoHandler *handlers.SSOHandler
+	var rbacHandler *handlers.GovernanceRBACHandler
+	var rbacMiddleware *handlers.RBACMiddleware
+
 	if s.Config != nil && s.Config.ConfigStore != nil {
 		var govSync handlers.UserGovernanceSync
 		if govPlugin, err := lib.FindPluginAs[governance.BaseGovernancePlugin](s.Config, governance.PluginName); err == nil {
@@ -1752,6 +1755,8 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 		}
 		usersHandler = handlers.NewGovernanceUsersHandler(s.Config.ConfigStore, govSync)
 		ssoHandler = handlers.NewSSOHandler(s.Config.ConfigStore, govSync)
+		rbacMiddleware = handlers.NewRBACMiddleware(s.Config.ConfigStore)
+		rbacHandler = handlers.NewGovernanceRBACHandler(s.Config.ConfigStore, rbacMiddleware)
 	}
 	promptsHandler := handlers.NewPromptsHandler(s.Config.ConfigStore, promptsReloader)
 	// Going ahead with API handlers
@@ -1778,6 +1783,9 @@ func (s *BifrostHTTPServer) RegisterAPIRoutes(ctx context.Context, callbacks Ser
 	}
 	if ssoHandler != nil {
 		ssoHandler.RegisterRoutes(s.Router, middlewares...)
+	}
+	if rbacHandler != nil {
+		rbacHandler.RegisterRoutes(s.Router, middlewares...)
 	}
 	if promptsHandler != nil {
 		promptsHandler.RegisterRoutes(s.Router, middlewares...)

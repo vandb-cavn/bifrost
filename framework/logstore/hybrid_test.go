@@ -13,13 +13,13 @@ import (
 
 type hybridTestLogger struct{}
 
-func (hybridTestLogger) Debug(string, ...any)                                  {}
-func (hybridTestLogger) Info(string, ...any)                                   {}
-func (hybridTestLogger) Warn(string, ...any)                                   {}
-func (hybridTestLogger) Error(string, ...any)                                  {}
-func (hybridTestLogger) Fatal(string, ...any)                                  {}
-func (hybridTestLogger) SetLevel(schemas.LogLevel)                             {}
-func (hybridTestLogger) SetOutputType(schemas.LoggerOutputType)                {}
+func (hybridTestLogger) Debug(string, ...any)                   {}
+func (hybridTestLogger) Info(string, ...any)                    {}
+func (hybridTestLogger) Warn(string, ...any)                    {}
+func (hybridTestLogger) Error(string, ...any)                   {}
+func (hybridTestLogger) Fatal(string, ...any)                   {}
+func (hybridTestLogger) SetLevel(schemas.LogLevel)              {}
+func (hybridTestLogger) SetOutputType(schemas.LoggerOutputType) {}
 func (hybridTestLogger) LogHTTPRequest(schemas.LogLevel, string) schemas.LogEventBuilder {
 	return schemas.NoopLogEvent
 }

@@ -590,3 +590,31 @@ export interface GetProviderGovernanceResponse {
 	providers: ProviderGovernance[];
 	count: number;
 }
+
+export interface Permission {
+	id: string;
+	resource: string;
+	operation: string;
+}
+
+export interface Role {
+	id: string;
+	name: string;
+	description: string;
+	is_system: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface MyPermissionsResponse {
+	is_admin: boolean;
+	permissions: Permission[];
+}
+
+export interface SetRolePermissionsRequest {
+	permission_ids: string[];
+}
+
+export interface AssignUserRoleRequest {
+	role_id: string;
+}

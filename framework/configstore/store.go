@@ -184,6 +184,20 @@ type ConfigStore interface {
 	DeleteUser(ctx context.Context, id string) error
 	UpsertUserByEmail(ctx context.Context, email, name, authMethod string) (*tables.TableUser, error)
 
+	// RBAC
+	ListRoles(ctx context.Context) ([]*tables.TableRole, error)
+	GetRole(ctx context.Context, id string) (*tables.TableRole, error)
+	CreateRole(ctx context.Context, role *tables.TableRole) error
+	UpdateRole(ctx context.Context, id string, fields map[string]any) (*tables.TableRole, error)
+	DeleteRole(ctx context.Context, id string) error
+	GetRolePermissions(ctx context.Context, roleID string) ([]*tables.TablePermission, error)
+	SetRolePermissions(ctx context.Context, roleID string, permissionIDs []string) error
+	ListPermissions(ctx context.Context) ([]*tables.TablePermission, error)
+	AssignUserRole(ctx context.Context, userID, roleID string) error
+	RemoveUserRole(ctx context.Context, userID, roleID string) error
+	GetUserRoles(ctx context.Context, userID string) ([]*tables.TableRole, error)
+	GetUserPermissions(ctx context.Context, userID string) ([]*tables.TablePermission, error)
+
 	// SSO config management
 	CreateSSOConfig(ctx context.Context, cfg *tables.TableGovernanceSSOConfig) error
 	ListSSOConfigs(ctx context.Context) ([]*tables.TableGovernanceSSOConfig, error)
