@@ -71,6 +71,7 @@ export interface SSOConfig {
 	client_id: string;
 	role_claim_key: string;
 	group_claim_key: string;
+	allowed_groups: string[];
 	enabled: boolean;
 	created_at: string;
 	updated_at: string;
@@ -83,6 +84,18 @@ export interface CreateSSOConfigRequest {
 	client_secret: string;
 	role_claim_key?: string;
 	group_claim_key?: string;
+	allowed_groups?: string[];
+}
+
+export interface UpdateSSOConfigRequest {
+	provider?: "okta" | "entra" | "google" | "keycloak" | "oidc";
+	issuer_url?: string;
+	client_id?: string;
+	client_secret?: string;
+	role_claim_key?: string;
+	group_claim_key?: string;
+	allowed_groups?: string[];
+	enabled?: boolean;
 }
 
 export interface DBKey {

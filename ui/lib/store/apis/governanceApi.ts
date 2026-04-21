@@ -33,6 +33,7 @@ import {
 	CreateUserRequest,
 	GovernanceUser,
 	SSOConfig,
+	UpdateSSOConfigRequest,
 	Team,
 	UpdateBudgetRequest,
 	UpdateCustomerRequest,
@@ -172,7 +173,7 @@ export const governanceApi = baseApi.injectEndpoints({
 			invalidatesTags: ["SSOConfigs"],
 		}),
 
-		updateSSOConfig: builder.mutation<{ config: SSOConfig }, { id: string; data: Partial<SSOConfig> & { client_secret?: string } }>({
+		updateSSOConfig: builder.mutation<{ config: SSOConfig }, { id: string; data: UpdateSSOConfigRequest }>({
 			query: ({ id, data }) => ({
 				url: `/governance/sso/configs/${id}`,
 				method: "PUT",

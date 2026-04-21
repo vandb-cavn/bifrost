@@ -203,6 +203,13 @@ func safeConfigResponse(cfg *tables.TableGovernanceSSOConfig) map[string]any {
 	if cfg == nil {
 		return nil
 	}
+	allowedGroups, err := cfg.GetAllowedGroups()
+	if err != nil {
+		logger.Error("sso: allowed_groups malformed in safeConfigResponse: %v", err)
+		allowedGroups = []string{} // not nil — keeps response type consistent
+	} else if allowedGroups == nil {
+		allowedGroups = []string{} // ensure it's an empty array, not null
+	}
 	return map[string]any{
 		"id":              cfg.ID,
 		"provider":        cfg.Provider,
@@ -210,6 +217,7 @@ func safeConfigResponse(cfg *tables.TableGovernanceSSOConfig) map[string]any {
 		"client_id":       cfg.ClientID,
 		"role_claim_key":  cfg.RoleClaimKey,
 		"group_claim_key": cfg.GroupClaimKey,
+		"allowed_groups":  allowedGroups,
 		"enabled":         cfg.Enabled,
 		"created_at":      cfg.CreatedAt,
 		"updated_at":      cfg.UpdatedAt,
@@ -231,12 +239,13 @@ func (h *SSOHandler) listConfigs(ctx *fasthttp.RequestCtx) {
 
 func (h *SSOHandler) createConfig(ctx *fasthttp.RequestCtx) {
 	var body struct {
-		Provider      string `json:"provider"`
-		IssuerURL     string `json:"issuer_url"`
-		ClientID      string `json:"client_id"`
-		ClientSecret  string `json:"client_secret"`
-		RoleClaimKey  string `json:"role_claim_key"`
-		GroupClaimKey string `json:"group_claim_key"`
+		Provider      string   `json:"provider"`
+		IssuerURL     string   `json:"issuer_url"`
+		ClientID      string   `json:"client_id"`
+		ClientSecret  string   `json:"client_secret"`
+		RoleClaimKey  string   `json:"role_claim_key"`
+		GroupClaimKey string   `json:"group_claim_key"`
+		AllowedGroups []string `json:"allowed_groups"`
 	}
 	if err := json.Unmarshal(ctx.PostBody(), &body); err != nil {
 		SendError(ctx, fasthttp.StatusBadRequest, "invalid request body")
@@ -270,6 +279,7 @@ func (h *SSOHandler) createConfig(ctx *fasthttp.RequestCtx) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
+	cfg.SetAllowedGroups(body.AllowedGroups)
 	if err := h.configStore.CreateSSOConfig(ctx, cfg); err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, err.Error())
 		return
@@ -316,8 +326,15 @@ func (h *SSOHandler) updateConfig(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusBadRequest, "client_secret cannot be empty")
 		return
 	}
+	if allowedGroups, hasKey := updates["allowed_groups"]; hasKey {
+		if _, ok := allowedGroups.([]any); !ok {
+			SendError(ctx, fasthttp.StatusBadRequest, "allowed_groups must be an array")
+			return
+		}
+	}
 
 	enableRequested, enablePresent := updates["enabled"].(bool)
+
 	if enablePresent && enableRequested {
 		delete(updates, "enabled")
 		if err := h.configStore.EnableSSOConfig(ctx, id); err != nil {
@@ -480,7 +497,7 @@ func (h *SSOHandler) callback(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusInternalServerError, "unsupported provider: "+cfg.Provider)
 		return
 	}
-	email, name, _, err := provider.ExtractUserInfo(claims, cfg)
+	email, name, groups, err := provider.ExtractUserInfo(claims, cfg)
 	if err != nil {
 		SendError(ctx, fasthttp.StatusUnauthorized, fmt.Sprintf("claim extraction failed: %v", err))
 		return
@@ -489,6 +506,32 @@ func (h *SSOHandler) callback(ctx *fasthttp.RequestCtx) {
 	if email == "" {
 		SendError(ctx, fasthttp.StatusUnauthorized, "missing email claim")
 		return
+	}
+
+	// Group filter: deny login if allowed_groups configured and user not in any.
+	// Fail-closed: if allowed_groups is set but malformed, deny login.
+	allowedGroups, err := cfg.GetAllowedGroups()
+	if err != nil {
+		logger.Error("sso: allowed_groups malformed, denying login: %v", err)
+		SendError(ctx, fasthttp.StatusUnauthorized, "not authorized for this application")
+		return
+	}
+	if len(allowedGroups) > 0 {
+		allowedSet := make(map[string]bool, len(allowedGroups))
+		for _, g := range allowedGroups {
+			allowedSet[g] = true // already lowercased by SetAllowedGroups
+		}
+		allowed := false
+		for _, g := range groups {
+			if allowedSet[strings.ToLower(strings.TrimSpace(g))] {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			SendError(ctx, fasthttp.StatusUnauthorized, "not authorized for this application")
+			return
+		}
 	}
 
 	user, err := h.configStore.UpsertUserByEmail(ctx, email, name, "oidc")

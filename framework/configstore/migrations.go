@@ -423,6 +423,12 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationExpandPermissionCatalog(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddCustomersTeamsPermissions(ctx, db); err != nil {
+		return err
+	}
+	if err := migrationAddSSOGroupFilter(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -6956,6 +6962,65 @@ func migrationExpandPermissionCatalog(ctx context.Context, db *gorm.DB) error {
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running expand_permission_catalog_v2 migration: %w", err)
+	}
+	return nil
+}
+
+// migrationAddCustomersTeamsPermissions adds Customers and Teams to the permission catalog
+// and grants all their permissions to the system-admin role.
+func migrationAddCustomersTeamsPermissions(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_customers_teams_permissions_v1",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			type perm struct{ resource, operation string }
+			resources := []string{"Customers", "Teams"}
+			ops := []string{"View", "Create", "Update", "Delete", "Download"}
+			for _, r := range resources {
+				for _, o := range ops {
+					id := strings.ToLower(r) + "_" + strings.ToLower(o)
+					row := &tables.TablePermission{ID: id, Resource: r, Operation: o}
+					if err := tx.FirstOrCreate(row, "id = ?", id).Error; err != nil {
+						return fmt.Errorf("seed permission %s:%s: %w", r, o, err)
+					}
+					rp := &tables.TableRolePermission{RoleID: "system-admin", PermissionID: id}
+					if err := tx.FirstOrCreate(rp, "role_id = ? AND permission_id = ?", "system-admin", id).Error; err != nil {
+						return fmt.Errorf("assign perm system-admin→%s: %w", id, err)
+					}
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_customers_teams_permissions_v1 migration: %w", err)
+	}
+	return nil
+}
+
+func migrationAddSSOGroupFilter(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_sso_group_filter_v1",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if !tx.Migrator().HasColumn(&tables.TableGovernanceSSOConfig{}, "allowed_groups") {
+				if err := tx.Migrator().AddColumn(&tables.TableGovernanceSSOConfig{}, "allowed_groups"); err != nil {
+					return fmt.Errorf("add allowed_groups: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			// No-op rollback: forward-only migration. Dropping columns in production
+			// is destructive and risky, so we preserve it on rollback.
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_sso_group_filter_v1: %w", err)
 	}
 	return nil
 }
