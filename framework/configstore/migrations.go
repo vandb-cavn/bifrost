@@ -6908,7 +6908,7 @@ func migrationExpandPermissionCatalog(ctx context.Context, db *gorm.DB) error {
 		Migrate: func(tx *gorm.DB) error {
 			tx = tx.WithContext(ctx)
 
-			// Seed full set of permissions: 22 resources × 5 operations
+			// Seed full set of permissions: 24 resources × 5 operations
 			type perm struct{ resource, operation string }
 			allPerms := []perm{}
 			resources := []string{
@@ -6917,6 +6917,7 @@ func migrationExpandPermissionCatalog(ctx context.Context, db *gorm.DB) error {
 				"Observability", "AuditLogs", "Cluster", "UserProvisioning", "Users",
 				"Settings", "RBAC", "Governance", "RoutingRules", "PIIRedactor",
 				"PromptRepository", "PromptDeploymentStrategy", "AccessProfiles",
+				"Customers", "Teams",
 			}
 			ops := []string{"View", "Create", "Update", "Delete", "Download"}
 			for _, r := range resources {
