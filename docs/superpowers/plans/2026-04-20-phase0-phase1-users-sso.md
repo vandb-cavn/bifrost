@@ -2857,6 +2857,138 @@ git commit -m "feat(sso): expose session identity via /api/session/me and show u
 
 ---
 
+---
+
+## Task 10: Role Assignment UI in UserDialog (Phase 1 Gap)
+
+**Goal**: Allow admins to assign and remove RBAC roles for a user directly from the Edit User dialog. All backend APIs and RTK Query hooks already exist — only UI is missing.
+
+**Scope**: Edit mode only (new users must be created first before roles can be assigned). Single file change: `ui/app/workspace/governance/views/userDialog.tsx`.
+
+**Available hooks (no new APIs needed):**
+- `useListRolesQuery()` — fetch all available roles
+- `useGetUserRolesQuery(userId)` — fetch current roles for this user
+- `useAssignUserRoleMutation()` — `POST /api/governance/rbac/users/{user_id}/roles`
+- `useRemoveUserRoleMutation()` — `DELETE /api/governance/rbac/users/{user_id}/roles/{role_id}`
+
+### Steps
+
+- [ ] **Step 1: Add roles section to UserDialog (edit mode only)**
+
+In `ui/app/workspace/governance/views/userDialog.tsx`, add below the team/budget/rate-limit grid:
+
+```tsx
+import { Badge } from "@/components/ui/badge";
+import { X } from "lucide-react";
+import {
+    useListRolesQuery,
+    useGetUserRolesQuery,
+    useAssignUserRoleMutation,
+    useRemoveUserRoleMutation,
+} from "@/lib/store";
+```
+
+Add roles UI inside the form, between the grid and DialogFooter (only when `isEditing`):
+
+```tsx
+{isEditing && user && (
+    <div className="space-y-2">
+        <Label>Roles</Label>
+        <RolesSection userId={user.id} hasPermission={hasPermission} />
+    </div>
+)}
+```
+
+Extract `RolesSection` as a local component inside the file:
+
+```tsx
+function RolesSection({ userId, hasPermission }: { userId: string; hasPermission: boolean }) {
+    const { data: allRolesData } = useListRolesQuery();
+    const { data: userRolesData, refetch } = useGetUserRolesQuery(userId);
+    const [assignRole, { isLoading: isAssigning }] = useAssignUserRoleMutation();
+    const [removeRole, { isLoading: isRemoving }] = useRemoveUserRoleMutation();
+
+    const userRoleIds = new Set((userRolesData?.roles ?? []).map((r) => r.id));
+    const assignableRoles = (allRolesData?.roles ?? []).filter((r) => !userRoleIds.has(r.id));
+
+    const handleAssign = async (roleId: string) => {
+        try {
+            await assignRole({ userId, roleId }).unwrap();
+            refetch();
+        } catch {
+            toast.error("Failed to assign role");
+        }
+    };
+
+    const handleRemove = async (roleId: string) => {
+        try {
+            await removeRole({ userId, roleId }).unwrap();
+            refetch();
+        } catch {
+            toast.error("Failed to remove role");
+        }
+    };
+
+    return (
+        <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+                {(userRolesData?.roles ?? []).map((role) => (
+                    <Badge key={role.id} variant="secondary" className="flex items-center gap-1">
+                        {role.name}
+                        {hasPermission && (
+                            <button
+                                type="button"
+                                onClick={() => handleRemove(role.id)}
+                                disabled={isRemoving}
+                                className="hover:text-destructive ml-1"
+                                aria-label={`Remove role ${role.name}`}
+                            >
+                                <X className="h-3 w-3" />
+                            </button>
+                        )}
+                    </Badge>
+                ))}
+                {(userRolesData?.roles ?? []).length === 0 && (
+                    <span className="text-muted-foreground text-sm">No roles assigned</span>
+                )}
+            </div>
+            {hasPermission && assignableRoles.length > 0 && (
+                <Select onValueChange={handleAssign} disabled={isAssigning} value="">
+                    <SelectTrigger className="w-48" data-testid="user-role-assign-select">
+                        <SelectValue placeholder="Add role..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {assignableRoles.map((role) => (
+                            <SelectItem key={role.id} value={role.id}>
+                                {role.name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            )}
+        </div>
+    );
+}
+```
+
+- [ ] **Step 2: Verify in browser**
+
+1. Open Governance → Users, click Edit on any user
+2. Roles section appears at bottom of dialog
+3. Assign "Admin" role → badge appears immediately
+4. Remove badge → role removed
+5. Dropdown only shows unassigned roles
+6. Create user dialog does NOT show roles section
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add ui/app/workspace/governance/views/userDialog.tsx
+git commit -m "feat(ui): add role assignment section to user edit dialog"
+```
+
+---
+
 ## Self-Review
 
 ### Spec coverage

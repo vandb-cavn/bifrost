@@ -1,5 +1,7 @@
 "use client";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -11,15 +13,23 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getErrorMessage, useCreateUserMutation, useUpdateUserMutation } from "@/lib/store";
+import {
+	getErrorMessage,
+	useAssignUserRoleMutation,
+	useCreateUserMutation,
+	useGetUserRolesQuery,
+	useListRolesQuery,
+	useRemoveUserRoleMutation,
+	useUpdateUserMutation,
+} from "@/lib/store";
 import { Budget, CreateUserRequest, GovernanceUser, RateLimit, Team, UpdateUserRequest } from "@/lib/types/governance";
 import { formatCurrency, parseResetPeriod } from "@/lib/utils/governance";
 import { Validator } from "@/lib/utils/validation";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import isEqual from "lodash.isequal";
+import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 
 interface UserDialogProps {
 	user?: GovernanceUser | null;
@@ -61,6 +71,74 @@ const getRateLimitLabel = (rateLimit: RateLimit) => {
 	}
 	return parts.length > 0 ? parts.join(" / ") : "No limits";
 };
+
+function RolesSection({ userId, hasPermission }: { userId: string; hasPermission: boolean }) {
+	const { data: allRolesData } = useListRolesQuery();
+	const { data: userRolesData, refetch } = useGetUserRolesQuery(userId);
+	const [assignRole, { isLoading: isAssigning }] = useAssignUserRoleMutation();
+	const [removeRole, { isLoading: isRemoving }] = useRemoveUserRoleMutation();
+
+	const userRoleIds = new Set((userRolesData?.roles ?? []).map((r) => r.id));
+	const assignableRoles = (allRolesData?.roles ?? []).filter((r) => !userRoleIds.has(r.id));
+
+	const handleAssign = async (roleId: string) => {
+		try {
+			await assignRole({ userId, roleId }).unwrap();
+			refetch();
+		} catch {
+			toast.error("Failed to assign role");
+		}
+	};
+
+	const handleRemove = async (roleId: string) => {
+		try {
+			await removeRole({ userId, roleId }).unwrap();
+			refetch();
+		} catch {
+			toast.error("Failed to remove role");
+		}
+	};
+
+	return (
+		<div className="space-y-2">
+			<div className="flex flex-wrap gap-2">
+				{(userRolesData?.roles ?? []).map((role) => (
+					<Badge key={role.id} variant="secondary" className="flex items-center gap-1">
+						{role.name}
+						{hasPermission && (
+							<button
+								type="button"
+								onClick={() => handleRemove(role.id)}
+								disabled={isRemoving}
+								className="hover:text-destructive ml-1"
+								aria-label={`Remove role ${role.name}`}
+							>
+								<X className="h-3 w-3" />
+							</button>
+						)}
+					</Badge>
+				))}
+				{(userRolesData?.roles ?? []).length === 0 && (
+					<span className="text-muted-foreground text-sm">No roles assigned</span>
+				)}
+			</div>
+			{hasPermission && assignableRoles.length > 0 && (
+				<Select onValueChange={handleAssign} disabled={isAssigning} value="">
+					<SelectTrigger className="w-48" data-testid="user-role-assign-select">
+						<SelectValue placeholder="Add role..." />
+					</SelectTrigger>
+					<SelectContent>
+						{assignableRoles.map((role) => (
+							<SelectItem key={role.id} value={role.id}>
+								{role.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			)}
+		</div>
+	);
+}
 
 export default function UserDialog({ user, teams, budgets, rateLimits, onSave, onCancel }: UserDialogProps) {
 	const isEditing = !!user;
@@ -229,6 +307,13 @@ export default function UserDialog({ user, teams, budgets, rateLimits, onSave, o
 							</Select>
 						</div>
 					</div>
+
+					{isEditing && user && (
+						<div className="space-y-2">
+							<Label>Roles</Label>
+							<RolesSection userId={user.id} hasPermission={hasPermission} />
+						</div>
+					)}
 
 					<DialogFooter className="pt-2">
 						<Button type="button" variant="outline" onClick={onCancel} data-testid="user-cancel-btn">
