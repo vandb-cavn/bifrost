@@ -14,7 +14,15 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alertDialog";
 
-type SSOProvider = "okta" | "entra";
+const PROVIDER_OPTIONS = [
+	{ value: "okta", label: "Okta", issuerPlaceholder: "https://your-org.okta.com" },
+	{ value: "entra", label: "Microsoft Entra", issuerPlaceholder: "https://login.microsoftonline.com/{tenant-id}/v2.0" },
+	{ value: "google", label: "Google Workspace", issuerPlaceholder: "https://accounts.google.com" },
+	{ value: "keycloak", label: "Keycloak", issuerPlaceholder: "https://keycloak.example.com/realms/{realm-name}" },
+	{ value: "oidc", label: "Generic OIDC", issuerPlaceholder: "https://your-idp.example.com" },
+] as const;
+
+type SSOProvider = (typeof PROVIDER_OPTIONS)[number]["value"];
 
 type SSOFormState = {
 	provider: SSOProvider;
@@ -34,8 +42,12 @@ const emptyFormState = (): SSOFormState => ({
 	group_claim_key: "",
 });
 
-function formatProvider(provider: SSOProvider) {
-	return provider === "okta" ? "Okta" : "Microsoft Entra";
+function formatProvider(provider: SSOProvider | string) {
+	return PROVIDER_OPTIONS.find((option) => option.value === provider)?.label ?? provider;
+}
+
+function getIssuerPlaceholder(provider: SSOProvider) {
+	return PROVIDER_OPTIONS.find((option) => option.value === provider)?.issuerPlaceholder ?? PROVIDER_OPTIONS[0].issuerPlaceholder;
 }
 
 function SSOConfigCard({
@@ -143,8 +155,8 @@ export default function SSOConfigTab() {
 	const busy = isCreating || isUpdating || isDeleting || isTestingFromMutation;
 	const isInitialLoading = isLoading && !data;
 	const isRefreshing = isFetching && !isInitialLoading;
-	const issuerPlaceholder = createForm.provider === "entra" ? "https://login.microsoftonline.com/{tenant-id}/v2.0" : "https://your-org.okta.com";
-	const editIssuerPlaceholder = editForm.provider === "entra" ? "https://login.microsoftonline.com/{tenant-id}/v2.0" : "https://your-org.okta.com";
+	const issuerPlaceholder = getIssuerPlaceholder(createForm.provider);
+	const editIssuerPlaceholder = getIssuerPlaceholder(editForm.provider);
 
 	const handleCreate = async () => {
 		try {
@@ -279,7 +291,7 @@ export default function SSOConfigTab() {
 					<div className="mb-4 flex items-center justify-between gap-2">
 						<div className="space-y-1">
 							<h3 className="font-medium">Add Provider</h3>
-							<p className="text-muted-foreground text-sm">Create a new Okta or Microsoft Entra configuration.</p>
+							<p className="text-muted-foreground text-sm">Create a new identity provider configuration.</p>
 						</div>
 						<Badge variant="secondary">Login button follows active config</Badge>
 					</div>
@@ -296,8 +308,11 @@ export default function SSOConfigTab() {
 									<SelectValue placeholder="Choose provider" />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="okta">Okta</SelectItem>
-									<SelectItem value="entra">Microsoft Entra</SelectItem>
+									{PROVIDER_OPTIONS.map((option) => (
+										<SelectItem key={option.value} value={option.value}>
+											{option.label}
+										</SelectItem>
+									))}
 								</SelectContent>
 							</Select>
 						</div>
@@ -395,7 +410,7 @@ export default function SSOConfigTab() {
 								<AlertTriangle className="text-muted-foreground size-4" />
 								No SSO configs yet
 							</div>
-							<p className="text-muted-foreground mt-2 text-sm">Add an Okta or Microsoft Entra provider above to enable SSO login.</p>
+							<p className="text-muted-foreground mt-2 text-sm">Add a provider above to enable SSO login.</p>
 						</div>
 					) : (
 						configs.map((cfg) => (
@@ -431,12 +446,15 @@ export default function SSOConfigTab() {
 													<SelectTrigger id={`sso-edit-provider-${cfg.id}`} data-testid={`sso-edit-provider-select-${cfg.id}`}>
 														<SelectValue placeholder="Choose provider" />
 													</SelectTrigger>
-													<SelectContent>
-														<SelectItem value="okta">Okta</SelectItem>
-														<SelectItem value="entra">Microsoft Entra</SelectItem>
-													</SelectContent>
-												</Select>
-											</div>
+												<SelectContent>
+													{PROVIDER_OPTIONS.map((option) => (
+														<SelectItem key={option.value} value={option.value}>
+															{option.label}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</div>
 											<div className="space-y-2">
 												<Label htmlFor={`sso-edit-issuer-${cfg.id}`}>Issuer URL</Label>
 												<Input

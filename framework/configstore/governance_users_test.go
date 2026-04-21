@@ -42,7 +42,7 @@ func TestCreateAndGetUser(t *testing.T) {
 		ID:         "user-1",
 		Email:      "alice@example.com",
 		Name:       "Alice",
-		AuthMethod: "password",
+		AuthMethod: "oidc",
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -54,7 +54,7 @@ func TestCreateAndGetUser(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, user.ID, got.ID)
 	assert.Equal(t, "Alice", got.Name)
-	assert.Equal(t, "password", got.AuthMethod)
+	assert.Equal(t, "oidc", got.AuthMethod)
 }
 
 func TestUpsertUserByEmail_CreateOnFirstLogin(t *testing.T) {
@@ -83,6 +83,7 @@ func TestUpsertUserByEmail_UpdateNameOnSubsequentLogin(t *testing.T) {
 	require.NotNil(t, second)
 	assert.Equal(t, first.ID, second.ID)
 	assert.Equal(t, "Carol Updated", second.Name)
+	assert.Equal(t, "oidc", second.AuthMethod)
 }
 
 func TestListUsers_Search(t *testing.T) {
@@ -90,7 +91,7 @@ func TestListUsers_Search(t *testing.T) {
 	ctx := context.Background()
 
 	for _, email := range []string{"alice@x.com", "bob@x.com", "charlie@x.com"} {
-		_, err := store.UpsertUserByEmail(ctx, email, email, "password")
+		_, err := store.UpsertUserByEmail(ctx, email, email, "oidc")
 		require.NoError(t, err)
 	}
 
@@ -126,7 +127,7 @@ func TestDeleteUser_CascadesBudgetAndRateLimit(t *testing.T) {
 		UpdatedAt:           now,
 	}).Error)
 
-	user, err := store.UpsertUserByEmail(ctx, "dave@x.com", "Dave", "password")
+	user, err := store.UpsertUserByEmail(ctx, "dave@x.com", "Dave", "oidc")
 	require.NoError(t, err)
 
 	updated, err := store.UpdateUser(ctx, user.ID, map[string]any{

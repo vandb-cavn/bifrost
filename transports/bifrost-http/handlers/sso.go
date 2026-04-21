@@ -176,7 +176,9 @@ func (h *SSOHandler) fetchJWKS(jwksURI string) ([]jose.JSONWebKey, error) {
 	return keySet.Keys, nil
 }
 
-func validateIssuerURL(rawURL string) error {
+var validateIssuerURL = validateIssuerURLImpl
+
+func validateIssuerURLImpl(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)

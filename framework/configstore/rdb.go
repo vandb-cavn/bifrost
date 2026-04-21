@@ -2911,8 +2911,9 @@ func (s *RDBConfigStore) UpsertUserByEmail(ctx context.Context, email, name, aut
 	existing, err := s.GetUserByEmail(ctx, email)
 	if err == nil {
 		return s.UpdateUser(ctx, existing.ID, map[string]any{
-			"name":       name,
-			"updated_at": time.Now(),
+			"name":        name,
+			"auth_method": authMethod,
+			"updated_at":  time.Now(),
 		})
 	}
 	if !errors.Is(err, ErrNotFound) {

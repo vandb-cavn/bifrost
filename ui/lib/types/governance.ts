@@ -66,7 +66,7 @@ export interface GovernanceUser {
 
 export interface SSOConfig {
 	id: string;
-	provider: "okta" | "entra";
+	provider: "okta" | "entra" | "google" | "keycloak" | "oidc";
 	issuer_url: string;
 	client_id: string;
 	role_claim_key: string;
@@ -77,7 +77,7 @@ export interface SSOConfig {
 }
 
 export interface CreateSSOConfigRequest {
-	provider: "okta" | "entra";
+	provider: "okta" | "entra" | "google" | "keycloak" | "oidc";
 	issuer_url: string;
 	client_id: string;
 	client_secret: string;

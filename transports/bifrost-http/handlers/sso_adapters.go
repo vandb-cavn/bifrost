@@ -17,8 +17,11 @@ type OIDCProvider interface {
 }
 
 var providerRegistry = map[string]OIDCProvider{
-	"okta":  OktaAdapter{},
-	"entra": EntraAdapter{},
+	"okta":     OktaAdapter{},
+	"entra":    EntraAdapter{},
+	"google":   GoogleAdapter{},
+	"keycloak": KeycloakAdapter{},
+	"oidc":     GenericOIDCAdapter{},
 }
 
 // OktaAdapter handles Okta-specific claim extraction.
@@ -62,6 +65,69 @@ func (EntraAdapter) ExtractUserInfo(claims map[string]any, cfg *tables.TableGove
 
 	if email == "" {
 		return "", "", nil, fmt.Errorf("entra: missing email/UPN claim")
+	}
+	return email, name, groups, nil
+}
+
+// GoogleAdapter handles Google Workspace OIDC claim extraction.
+type GoogleAdapter struct{}
+
+func (GoogleAdapter) Name() string { return "google" }
+
+func (GoogleAdapter) ExtractUserInfo(claims map[string]any, cfg *tables.TableGovernanceSSOConfig) (string, string, []string, error) {
+	email, _ := claims["email"].(string)
+	name, _ := claims["name"].(string)
+
+	groupKey := "groups"
+	if cfg != nil && cfg.GroupClaimKey != "" {
+		groupKey = cfg.GroupClaimKey
+	}
+	groups := extractStringSliceClaim(claims, groupKey)
+
+	if email == "" {
+		return "", "", nil, fmt.Errorf("google: missing email claim")
+	}
+	return email, name, groups, nil
+}
+
+// KeycloakAdapter handles Keycloak OIDC claim extraction.
+type KeycloakAdapter struct{}
+
+func (KeycloakAdapter) Name() string { return "keycloak" }
+
+func (KeycloakAdapter) ExtractUserInfo(claims map[string]any, cfg *tables.TableGovernanceSSOConfig) (string, string, []string, error) {
+	email, _ := claims["email"].(string)
+	name, _ := claims["name"].(string)
+
+	groupKey := "groups"
+	if cfg != nil && cfg.GroupClaimKey != "" {
+		groupKey = cfg.GroupClaimKey
+	}
+	groups := extractStringSliceClaim(claims, groupKey)
+
+	if email == "" {
+		return "", "", nil, fmt.Errorf("keycloak: missing email claim")
+	}
+	return email, name, groups, nil
+}
+
+// GenericOIDCAdapter handles any standards-compliant OIDC provider.
+type GenericOIDCAdapter struct{}
+
+func (GenericOIDCAdapter) Name() string { return "oidc" }
+
+func (GenericOIDCAdapter) ExtractUserInfo(claims map[string]any, cfg *tables.TableGovernanceSSOConfig) (string, string, []string, error) {
+	email, _ := claims["email"].(string)
+	name, _ := claims["name"].(string)
+
+	groupKey := "groups"
+	if cfg != nil && cfg.GroupClaimKey != "" {
+		groupKey = cfg.GroupClaimKey
+	}
+	groups := extractStringSliceClaim(claims, groupKey)
+
+	if email == "" {
+		return "", "", nil, fmt.Errorf("oidc: missing email claim")
 	}
 	return email, name, groups, nil
 }

@@ -96,7 +96,7 @@ func (h *GovernanceUsersHandler) createUser(ctx *fasthttp.RequestCtx) {
 		TeamID:      body.TeamID,
 		BudgetID:    body.BudgetID,
 		RateLimitID: body.RateLimitID,
-		AuthMethod:  "password",
+		AuthMethod:  "oidc",
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
