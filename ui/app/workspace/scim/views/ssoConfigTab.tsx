@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { getErrorMessage, useCreateSSOConfigMutation, useDeleteSSOConfigMutation, useGetSSOConfigsQuery, useTestSSOConfigMutation, useUpdateSSOConfigMutation } from "@/lib/store";
 import { SSOConfig } from "@/lib/types/governance";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
-import { AlertTriangle, CheckCircle2, Loader2, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Plus, RefreshCw, Settings2, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alertDialog";
@@ -31,6 +31,7 @@ type SSOFormState = {
 	client_secret: string;
 	role_claim_key: string;
 	group_claim_key: string;
+	allowed_groups: string[];
 };
 
 const emptyFormState = (): SSOFormState => ({
@@ -40,6 +41,7 @@ const emptyFormState = (): SSOFormState => ({
 	client_secret: "",
 	role_claim_key: "",
 	group_claim_key: "",
+	allowed_groups: [],
 });
 
 function formatProvider(provider: SSOProvider | string) {
@@ -87,6 +89,18 @@ function SSOConfigCard({
 								Role: {cfg.role_claim_key || "-"} | Group: {cfg.group_claim_key || "-"}
 							</div>
 						</div>
+						{cfg.allowed_groups && cfg.allowed_groups.length > 0 && (
+							<div className="md:col-span-2">
+								<div className="text-foreground font-medium">Allowed Groups</div>
+								<div className="flex flex-wrap gap-1 mt-1">
+									{cfg.allowed_groups.map((g) => (
+										<Badge key={g} variant="outline" className="text-[10px] py-0 h-4">
+											{g}
+										</Badge>
+									))}
+								</div>
+							</div>
+						)}
 					</div>
 				</div>
 
@@ -144,9 +158,11 @@ export default function SSOConfigTab() {
 	const [deleteConfig, { isLoading: isDeleting }] = useDeleteSSOConfigMutation();
 	const [testConfig, { isLoading: isTestingFromMutation }] = useTestSSOConfigMutation();
 	const [createForm, setCreateForm] = useState<SSOFormState>(emptyFormState);
+	const [createGroupInput, setCreateGroupInput] = useState("");
 	const [createAdvancedOpen, setCreateAdvancedOpen] = useState(false);
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editForm, setEditForm] = useState<SSOFormState>(emptyFormState);
+	const [editGroupInput, setEditGroupInput] = useState("");
 	const [editAdvancedOpen, setEditAdvancedOpen] = useState(false);
 	const [testingId, setTestingId] = useState<string | null>(null);
 	const [deleteTarget, setDeleteTarget] = useState<SSOConfig | null>(null);
@@ -157,6 +173,31 @@ export default function SSOConfigTab() {
 	const isRefreshing = isFetching && !isInitialLoading;
 	const issuerPlaceholder = getIssuerPlaceholder(createForm.provider);
 	const editIssuerPlaceholder = getIssuerPlaceholder(editForm.provider);
+
+	const addGroup = (isEdit: boolean) => {
+		const input = isEdit ? editGroupInput : createGroupInput;
+		const setInput = isEdit ? setEditGroupInput : setCreateGroupInput;
+		const form = isEdit ? editForm : createForm;
+		const setForm = isEdit ? setEditForm : setCreateForm;
+
+		const trimmed = input.trim().toLowerCase();
+		if (!trimmed) return;
+		if (form.allowed_groups.includes(trimmed)) return;
+
+		setForm((prev) => ({
+			...prev,
+			allowed_groups: [...prev.allowed_groups, trimmed],
+		}));
+		setInput("");
+	};
+
+	const removeGroup = (isEdit: boolean, group: string) => {
+		const setForm = isEdit ? setEditForm : setCreateForm;
+		setForm((prev) => ({
+			...prev,
+			allowed_groups: prev.allowed_groups.filter((g) => g !== group),
+		}));
+	};
 
 	const handleCreate = async () => {
 		try {
@@ -178,6 +219,7 @@ export default function SSOConfigTab() {
 			client_secret: "",
 			role_claim_key: cfg.role_claim_key || "",
 			group_claim_key: cfg.group_claim_key || "",
+			allowed_groups: cfg.allowed_groups ?? [],
 		});
 		setEditAdvancedOpen(false);
 	};
@@ -374,6 +416,59 @@ export default function SSOConfigTab() {
 									data-testid="sso-create-group-claim-input"
 								/>
 							</div>
+
+							<div className="md:col-span-2 space-y-3 pt-2">
+								<div className="space-y-1">
+									<Label>Allowed Groups</Label>
+									<p className="text-muted-foreground text-xs">
+										Only users in these IdP groups can log in. Leave empty to allow all.
+									</p>
+									{createForm.allowed_groups.length > 0 && (
+										<p className="text-amber-600 text-xs flex items-center gap-1">
+											<AlertTriangle className="size-3" />
+											Ensure the Group Claim Key is correctly configured in your IdP before enabling group filter.
+										</p>
+									)}
+								</div>
+
+								<div className="flex flex-wrap gap-2 min-h-8 p-2 border rounded-md bg-muted/20">
+									{createForm.allowed_groups.length === 0 && (
+										<span className="text-muted-foreground text-xs italic">All users allowed</span>
+									)}
+									{createForm.allowed_groups.map((g) => (
+										<Badge key={g} variant="secondary" className="gap-1">
+											{g}
+											<button
+												type="button"
+												onClick={() => removeGroup(false, g)}
+												className="hover:text-destructive transition-colors"
+												disabled={!canManage}
+											>
+												<X className="h-3 w-3" />
+											</button>
+										</Badge>
+									))}
+								</div>
+
+								<div className="flex gap-2">
+									<Input
+										placeholder="Enter group name and press Enter"
+										value={createGroupInput}
+										onChange={(e) => setCreateGroupInput(e.target.value)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") {
+												e.preventDefault();
+												addGroup(false);
+											}
+										}}
+										disabled={!canManage}
+										data-testid="sso-create-group-filter-input"
+									/>
+									<Button type="button" variant="outline" onClick={() => addGroup(false)} disabled={!canManage}>
+										Add
+									</Button>
+								</div>
+							</div>
 						</div>
 					)}
 
@@ -522,6 +617,59 @@ export default function SSOConfigTab() {
 															disabled={!canManage}
 															data-testid={`sso-edit-group-claim-input-${cfg.id}`}
 														/>
+													</div>
+
+													<div className="md:col-span-2 space-y-3 pt-2">
+														<div className="space-y-1">
+															<Label>Allowed Groups</Label>
+															<p className="text-muted-foreground text-xs">
+																Only users in these IdP groups can log in. Leave empty to allow all.
+															</p>
+															{editForm.allowed_groups.length > 0 && (
+																<p className="text-amber-600 text-xs flex items-center gap-1">
+																	<AlertTriangle className="size-3" />
+																	Ensure the Group Claim Key is correctly configured in your IdP before enabling group filter.
+																</p>
+															)}
+														</div>
+
+														<div className="flex flex-wrap gap-2 min-h-8 p-2 border rounded-md bg-muted/20">
+															{editForm.allowed_groups.length === 0 && (
+																<span className="text-muted-foreground text-xs italic">All users allowed</span>
+															)}
+															{editForm.allowed_groups.map((g) => (
+																<Badge key={g} variant="secondary" className="gap-1">
+																	{g}
+																	<button
+																		type="button"
+																		onClick={() => removeGroup(true, g)}
+																		className="hover:text-destructive transition-colors"
+																		disabled={!canManage}
+																	>
+																		<X className="h-3 w-3" />
+																	</button>
+																</Badge>
+															))}
+														</div>
+
+														<div className="flex gap-2">
+															<Input
+																placeholder="Enter group name and press Enter"
+																value={editGroupInput}
+																onChange={(e) => setEditGroupInput(e.target.value)}
+																onKeyDown={(e) => {
+																	if (e.key === "Enter") {
+																		e.preventDefault();
+																		addGroup(true);
+																	}
+																}}
+																disabled={!canManage}
+																data-testid={`sso-edit-group-filter-input-${cfg.id}`}
+															/>
+															<Button type="button" variant="outline" onClick={() => addGroup(true)} disabled={!canManage}>
+																Add
+															</Button>
+														</div>
 													</div>
 												</div>
 											)}

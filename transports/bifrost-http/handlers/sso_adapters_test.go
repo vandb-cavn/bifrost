@@ -230,6 +230,9 @@ func (m *mockConfigStoreForSSO) UpdateSSOConfig(_ context.Context, id string, up
 		if clientID, ok := updates["client_id"].(string); ok {
 			m.existingConfig.ClientID = clientID
 		}
+		if allowedGroups, ok := updates["allowed_groups"].([]string); ok {
+			m.existingConfig.SetAllowedGroups(allowedGroups)
+		}
 		return m.existingConfig, nil
 	}
 	return nil, configstore.ErrNotFound

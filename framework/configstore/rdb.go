@@ -3020,6 +3020,16 @@ func (s *RDBConfigStore) UpdateSSOConfig(ctx context.Context, id string, updates
 			if v, ok := value.(string); ok {
 				cfg.GroupClaimKey = v
 			}
+		case "allowed_groups":
+			if v, ok := value.([]any); ok {
+				groups := make([]string, 0, len(v))
+				for _, item := range v {
+					if s, ok := item.(string); ok {
+						groups = append(groups, s)
+					}
+				}
+				cfg.SetAllowedGroups(groups)
+			}
 		case "enabled":
 			if v, ok := value.(bool); ok {
 				cfg.Enabled = v

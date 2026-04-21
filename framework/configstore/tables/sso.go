@@ -1,7 +1,9 @@
 package tables
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/maximhq/bifrost/framework/encrypt"
@@ -17,6 +19,7 @@ type TableGovernanceSSOConfig struct {
 	ClientSecret     string    `gorm:"type:text;not null" json:"-"`
 	RoleClaimKey     string    `gorm:"type:varchar(255);not null;default:''" json:"role_claim_key"`
 	GroupClaimKey    string    `gorm:"type:varchar(255);not null;default:''" json:"group_claim_key"`
+	AllowedGroups    string    `gorm:"type:text;not null;default:''" json:"-"`
 	Enabled          bool      `gorm:"not null;default:false" json:"enabled"`
 	EncryptionStatus string    `gorm:"type:varchar(20);default:'plain_text'" json:"-"`
 	CreatedAt        time.Time `gorm:"index;not null" json:"created_at"`
@@ -25,6 +28,39 @@ type TableGovernanceSSOConfig struct {
 
 // TableName sets the table name for each model.
 func (TableGovernanceSSOConfig) TableName() string { return "governance_sso_configs" }
+
+// GetAllowedGroups returns the parsed allowed groups list.
+// Returns an error if AllowedGroups is non-empty but malformed — callers must
+// treat this as a deny (fail-closed) to prevent bypassing the filter.
+func (c *TableGovernanceSSOConfig) GetAllowedGroups() ([]string, error) {
+	if c.AllowedGroups == "" {
+		return nil, nil
+	}
+	var groups []string
+	if err := json.Unmarshal([]byte(c.AllowedGroups), &groups); err != nil {
+		return nil, fmt.Errorf("allowed_groups is malformed: %w", err)
+	}
+	return groups, nil
+}
+
+func (c *TableGovernanceSSOConfig) SetAllowedGroups(groups []string) {
+	seen := make(map[string]bool)
+	sanitized := make([]string, 0, len(groups))
+	for _, g := range groups {
+		g = strings.ToLower(strings.TrimSpace(g))
+		if g == "" || seen[g] {
+			continue
+		}
+		seen[g] = true
+		sanitized = append(sanitized, g)
+	}
+	if len(sanitized) == 0 {
+		c.AllowedGroups = ""
+		return
+	}
+	b, _ := json.Marshal(sanitized)
+	c.AllowedGroups = string(b)
+}
 
 // BeforeSave encrypts the client secret when encryption is enabled.
 func (c *TableGovernanceSSOConfig) BeforeSave(tx *gorm.DB) error {

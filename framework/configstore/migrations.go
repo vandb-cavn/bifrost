@@ -426,6 +426,9 @@ func triggerMigrations(ctx context.Context, db *gorm.DB) error {
 	if err := migrationAddCustomersTeamsPermissions(ctx, db); err != nil {
 		return err
 	}
+	if err := migrationAddSSOGroupFilter(ctx, db); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -6994,6 +6997,26 @@ func migrationAddCustomersTeamsPermissions(ctx context.Context, db *gorm.DB) err
 	}})
 	if err := m.Migrate(); err != nil {
 		return fmt.Errorf("error running add_customers_teams_permissions_v1 migration: %w", err)
+	}
+	return nil
+}
+
+func migrationAddSSOGroupFilter(ctx context.Context, db *gorm.DB) error {
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_sso_group_filter_v1",
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if !tx.Migrator().HasColumn(&tables.TableGovernanceSSOConfig{}, "allowed_groups") {
+				if err := tx.Migrator().AddColumn(&tables.TableGovernanceSSOConfig{}, "allowed_groups"); err != nil {
+					return fmt.Errorf("add allowed_groups: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error { return nil },
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running add_sso_group_filter_v1: %w", err)
 	}
 	return nil
 }
