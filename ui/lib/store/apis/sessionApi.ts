@@ -35,6 +35,7 @@ export const sessionApi = baseApi.injectEndpoints({
 				url: "/session/me",
 				method: "GET",
 			}),
+			providesTags: ["SessionMe"],
 		}),
 		// Login endpoint
 		login: builder.mutation<LoginResponse, LoginRequest>({
@@ -61,7 +62,7 @@ export const sessionApi = baseApi.injectEndpoints({
 					clearAuthStorage();
 				}
 			},
-			invalidatesTags: ["Config", "Providers", "Logs", "VirtualKeys", "Teams", "Customers", "Budgets", "RateLimits"],
+			invalidatesTags: ["Config", "Providers", "Logs", "VirtualKeys", "Teams", "Customers", "Budgets", "RateLimits", "SessionMe"],
 		}),
 	}),
 });

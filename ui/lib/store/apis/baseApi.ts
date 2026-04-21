@@ -166,6 +166,7 @@ export const baseApi = createApi({
 		"Sessions",
 		"AccessProfiles",
 		"BusinessUnits",
+		"SessionMe",
 	],
 	endpoints: () => ({}),
 });
