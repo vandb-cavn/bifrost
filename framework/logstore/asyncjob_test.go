@@ -15,13 +15,13 @@ import (
 
 type asyncTestLogger struct{}
 
-func (asyncTestLogger) Debug(string, ...any)                                  {}
-func (asyncTestLogger) Info(string, ...any)                                   {}
-func (asyncTestLogger) Warn(string, ...any)                                   {}
-func (asyncTestLogger) Error(string, ...any)                                  {}
-func (asyncTestLogger) Fatal(string, ...any)                                  {}
-func (asyncTestLogger) SetLevel(schemas.LogLevel)                             {}
-func (asyncTestLogger) SetOutputType(schemas.LoggerOutputType)                {}
+func (asyncTestLogger) Debug(string, ...any)                   {}
+func (asyncTestLogger) Info(string, ...any)                    {}
+func (asyncTestLogger) Warn(string, ...any)                    {}
+func (asyncTestLogger) Error(string, ...any)                   {}
+func (asyncTestLogger) Fatal(string, ...any)                   {}
+func (asyncTestLogger) SetLevel(schemas.LogLevel)              {}
+func (asyncTestLogger) SetOutputType(schemas.LoggerOutputType) {}
 func (asyncTestLogger) LogHTTPRequest(schemas.LogLevel, string) schemas.LogEventBuilder {
 	return schemas.NoopLogEvent
 }
@@ -88,7 +88,7 @@ func TestSubmitJob_PropagatesContextValues(t *testing.T) {
 
 	// Simulate original request context values
 	contextValues := map[any]any{
-		schemas.BifrostContextKeyVirtualKey: "sk-bf-test",
+		schemas.BifrostContextKeyVirtualKey:         "sk-bf-test",
 		schemas.BifrostContextKey("x-bf-prom-env"):  "production",
 		schemas.BifrostContextKey("x-bf-eh-custom"): "custom-value",
 	}

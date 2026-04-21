@@ -308,7 +308,6 @@ func TestMigrationAddMetadataGINIndex_Idempotent(t *testing.T) {
 	err := migrationAddMetadataGINIndex(ctx, db)
 	require.NoError(t, err, "First migration should succeed")
 
-
 	sqlDB, err := db.DB()
 	if err != nil {
 		t.Fatalf("Failed to get SQL DB: %v", err)

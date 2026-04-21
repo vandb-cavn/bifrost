@@ -145,6 +145,7 @@ export const baseApi = createApi({
 		"Guardrails",
 		"ClusterNodes",
 		"Users",
+		"SSOConfigs",
 		"GuardrailRules",
 		"GuardrailProfiles",
 		"Roles",
@@ -165,6 +166,7 @@ export const baseApi = createApi({
 		"Sessions",
 		"AccessProfiles",
 		"BusinessUnits",
+		"SessionMe",
 	],
 	endpoints: () => ({}),
 });

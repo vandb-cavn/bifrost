@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
@@ -181,6 +182,11 @@ func (s *RDBConfigStore) Ping(ctx context.Context) error {
 
 // DB returns the underlying database connection.
 func (s *RDBConfigStore) DB() *gorm.DB {
+	return s.db
+}
+
+// TestDB returns the raw DB handle — only for use in tests.
+func (s *RDBConfigStore) TestDB() *gorm.DB {
 	return s.db
 }
 
@@ -2779,6 +2785,330 @@ func (s *RDBConfigStore) DeleteCustomer(ctx context.Context, id string) error {
 		return err
 	}
 	return nil
+}
+
+// CreateUser inserts a new governance user into the database.
+func (s *RDBConfigStore) CreateUser(ctx context.Context, user *tables.TableUser) error {
+	if err := s.db.WithContext(ctx).Create(user).Error; err != nil {
+		return s.parseGormError(err)
+	}
+	return nil
+}
+
+// GetUser fetches a governance user by primary key.
+func (s *RDBConfigStore) GetUser(ctx context.Context, id string) (*tables.TableUser, error) {
+	var user tables.TableUser
+	if err := s.db.WithContext(ctx).
+		Preload("Team").
+		Preload("Budget").
+		Preload("RateLimit").
+		First(&user, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetUserByEmail fetches a governance user by email address.
+func (s *RDBConfigStore) GetUserByEmail(ctx context.Context, email string) (*tables.TableUser, error) {
+	var user tables.TableUser
+	if err := s.db.WithContext(ctx).
+		Preload("Team").
+		Preload("Budget").
+		Preload("RateLimit").
+		Where("LOWER(email) = LOWER(?)", email).
+		First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// ListUsers returns governance users with search and pagination.
+func (s *RDBConfigStore) ListUsers(ctx context.Context, search string, limit, offset int) ([]*tables.TableUser, int64, error) {
+	baseQuery := s.db.WithContext(ctx).Model(&tables.TableUser{})
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		baseQuery = baseQuery.Where("LOWER(email) LIKE ? OR LOWER(name) LIKE ?", like, like)
+	}
+
+	var totalCount int64
+	if err := baseQuery.Count(&totalCount).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var users []*tables.TableUser
+	if err := baseQuery.
+		Preload("Team").
+		Preload("Budget").
+		Preload("RateLimit").
+		Order("created_at ASC, id ASC").
+		Offset(offset).
+		Limit(limit).
+		Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+	return users, totalCount, nil
+}
+
+// UpdateUser applies partial updates to a governance user.
+func (s *RDBConfigStore) UpdateUser(ctx context.Context, id string, updates map[string]any) (*tables.TableUser, error) {
+	if err := s.db.WithContext(ctx).
+		Model(&tables.TableUser{}).
+		Where("id = ?", id).
+		Updates(updates).Error; err != nil {
+		return nil, s.parseGormError(err)
+	}
+	return s.GetUser(ctx, id)
+}
+
+// DeleteUser deletes a governance user and any owned budget or rate limit rows.
+func (s *RDBConfigStore) DeleteUser(ctx context.Context, id string) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user tables.TableUser
+		if err := tx.WithContext(ctx).Preload("Budget").Preload("RateLimit").First(&user, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		budgetID := user.BudgetID
+		rateLimitID := user.RateLimitID
+
+		if err := tx.WithContext(ctx).Delete(&tables.TableUser{}, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if budgetID != nil {
+			if err := tx.WithContext(ctx).Delete(&tables.TableBudget{}, "id = ?", *budgetID).Error; err != nil {
+				return err
+			}
+		}
+		if rateLimitID != nil {
+			if err := tx.WithContext(ctx).Delete(&tables.TableRateLimit{}, "id = ?", *rateLimitID).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpsertUserByEmail inserts a user on first login or updates the display name on later logins.
+func (s *RDBConfigStore) UpsertUserByEmail(ctx context.Context, email, name, authMethod string) (*tables.TableUser, error) {
+	existing, err := s.GetUserByEmail(ctx, email)
+	if err == nil {
+		return s.UpdateUser(ctx, existing.ID, map[string]any{
+			"name":        name,
+			"auth_method": authMethod,
+			"updated_at":  time.Now(),
+		})
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+
+	now := time.Now()
+	user := &tables.TableUser{
+		ID:         uuid.New().String(),
+		Email:      email,
+		Name:       name,
+		AuthMethod: authMethod,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := s.CreateUser(ctx, user); err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// CreateSSOConfig inserts a new governance SSO config.
+func (s *RDBConfigStore) CreateSSOConfig(ctx context.Context, cfg *tables.TableGovernanceSSOConfig) error {
+	if err := s.db.WithContext(ctx).Create(cfg).Error; err != nil {
+		return s.parseGormError(err)
+	}
+	return nil
+}
+
+// ListSSOConfigs returns all governance SSO configs in creation order.
+func (s *RDBConfigStore) ListSSOConfigs(ctx context.Context) ([]*tables.TableGovernanceSSOConfig, error) {
+	var cfgs []*tables.TableGovernanceSSOConfig
+	if err := s.db.WithContext(ctx).Order("created_at ASC, id ASC").Find(&cfgs).Error; err != nil {
+		return nil, err
+	}
+	return cfgs, nil
+}
+
+// GetSSOConfig fetches a governance SSO config by primary key.
+func (s *RDBConfigStore) GetSSOConfig(ctx context.Context, id string) (*tables.TableGovernanceSSOConfig, error) {
+	var cfg tables.TableGovernanceSSOConfig
+	if err := s.db.WithContext(ctx).First(&cfg, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// GetActiveSSOConfig fetches the single enabled governance SSO config.
+func (s *RDBConfigStore) GetActiveSSOConfig(ctx context.Context) (*tables.TableGovernanceSSOConfig, error) {
+	var cfg tables.TableGovernanceSSOConfig
+	if err := s.db.WithContext(ctx).
+		Where("enabled = ?", true).
+		Order("created_at ASC, id ASC").
+		First(&cfg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// UpdateSSOConfig applies partial updates to a governance SSO config.
+func (s *RDBConfigStore) UpdateSSOConfig(ctx context.Context, id string, updates map[string]any) (*tables.TableGovernanceSSOConfig, error) {
+	var cfg tables.TableGovernanceSSOConfig
+	if err := s.db.WithContext(ctx).First(&cfg, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	for key, value := range updates {
+		switch key {
+		case "provider":
+			if v, ok := value.(string); ok {
+				cfg.Provider = v
+			}
+		case "issuer_url":
+			if v, ok := value.(string); ok {
+				cfg.IssuerURL = v
+			}
+		case "client_id":
+			if v, ok := value.(string); ok {
+				cfg.ClientID = v
+			}
+		case "client_secret":
+			if v, ok := value.(string); ok {
+				cfg.ClientSecret = v
+			}
+		case "role_claim_key":
+			if v, ok := value.(string); ok {
+				cfg.RoleClaimKey = v
+			}
+		case "group_claim_key":
+			if v, ok := value.(string); ok {
+				cfg.GroupClaimKey = v
+			}
+		case "enabled":
+			if v, ok := value.(bool); ok {
+				cfg.Enabled = v
+			}
+		}
+	}
+
+	if err := s.db.WithContext(ctx).Save(&cfg).Error; err != nil {
+		return nil, s.parseGormError(err)
+	}
+	return s.GetSSOConfig(ctx, id)
+}
+
+// EnableSSOConfig enables the requested config and disables all others.
+func (s *RDBConfigStore) EnableSSOConfig(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var target tables.TableGovernanceSSOConfig
+		if err := tx.WithContext(ctx).First(&target, "id = ?", id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if err := tx.WithContext(ctx).
+			Model(&tables.TableGovernanceSSOConfig{}).
+			Where("id != ?", id).
+			Update("enabled", false).Error; err != nil {
+			return err
+		}
+
+		return tx.WithContext(ctx).
+			Model(&tables.TableGovernanceSSOConfig{}).
+			Where("id = ?", id).
+			Update("enabled", true).Error
+	})
+}
+
+// DeleteSSOConfig deletes a governance SSO config.
+func (s *RDBConfigStore) DeleteSSOConfig(ctx context.Context, id string) error {
+	result := s.db.WithContext(ctx).Delete(&tables.TableGovernanceSSOConfig{}, "id = ?", id)
+	if result.Error != nil {
+		return s.parseGormError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CreateSSONonce stores an in-flight SSO login nonce entry.
+func (s *RDBConfigStore) CreateSSONonce(ctx context.Context, state, codeVerifier, nonce, provider string, expiresAt time.Time) error {
+	row := &tables.TableGovernanceSSONonce{
+		State:        state,
+		CodeVerifier: codeVerifier,
+		Nonce:        nonce,
+		Provider:     provider,
+		ExpiresAt:    expiresAt,
+	}
+	if err := s.db.WithContext(ctx).Create(row).Error; err != nil {
+		return s.parseGormError(err)
+	}
+	return nil
+}
+
+// ConsumeAndDeleteSSONonce fetches a nonce by state and deletes it in one transaction.
+func (s *RDBConfigStore) ConsumeAndDeleteSSONonce(ctx context.Context, state string) (*tables.TableGovernanceSSONonce, error) {
+	var nonce tables.TableGovernanceSSONonce
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&nonce, "state = ? AND expires_at > ?", state, time.Now().UTC()).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return tx.WithContext(ctx).Delete(&tables.TableGovernanceSSONonce{}, "state = ?", state).Error
+	}); err != nil {
+		return nil, err
+	}
+	return &nonce, nil
+}
+
+// DeleteExpiredSSONonces removes expired nonce rows.
+func (s *RDBConfigStore) DeleteExpiredSSONonces(ctx context.Context) error {
+	return s.db.WithContext(ctx).
+		Where("expires_at < ?", time.Now().UTC()).
+		Delete(&tables.TableGovernanceSSONonce{}).Error
 }
 
 // GetRateLimits retrieves all rate limits from the database.

@@ -10,13 +10,16 @@ import (
 
 // SessionsTable represents a session in the database
 type SessionsTable struct {
-	ID               int       `gorm:"primaryKey;autoIncrement" json:"id"`
-	Token            string    `gorm:"type:text;not null;uniqueIndex" json:"token"`
-	ExpiresAt        time.Time `gorm:"index;not null" json:"expires_at,omitempty"`
-	CreatedAt        time.Time `gorm:"index;not null" json:"created_at"`
-	UpdatedAt        time.Time `gorm:"index;not null" json:"updated_at"`
-	EncryptionStatus string    `gorm:"type:varchar(20);default:'plain_text'" json:"-"`
-	TokenHash        string    `gorm:"type:varchar(64);index:idx_session_token_hash,unique" json:"-"`
+	ID               int        `gorm:"primaryKey;autoIncrement" json:"id"`
+	Token            string     `gorm:"type:text;not null;uniqueIndex" json:"token"`
+	UserID           *string    `gorm:"type:text;index" json:"user_id,omitempty"`
+	User             *TableUser `gorm:"foreignKey:UserID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"user,omitempty"`
+	AuthMethod       string     `gorm:"type:text;not null;default:'password'" json:"auth_method"`
+	ExpiresAt        time.Time  `gorm:"index;not null" json:"expires_at,omitempty"`
+	CreatedAt        time.Time  `gorm:"index;not null" json:"created_at"`
+	UpdatedAt        time.Time  `gorm:"index;not null" json:"updated_at"`
+	EncryptionStatus string     `gorm:"type:varchar(20);default:'plain_text'" json:"-"`
+	TokenHash        string     `gorm:"type:varchar(64);index:idx_session_token_hash,unique" json:"-"`
 }
 
 // TableName sets the table name for each model

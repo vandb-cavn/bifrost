@@ -175,6 +175,43 @@ type ConfigStore interface {
 	UpdateTeam(ctx context.Context, team *tables.TableTeam, tx ...*gorm.DB) error
 	DeleteTeam(ctx context.Context, id string) error
 
+	// User management
+	CreateUser(ctx context.Context, user *tables.TableUser) error
+	GetUser(ctx context.Context, id string) (*tables.TableUser, error)
+	GetUserByEmail(ctx context.Context, email string) (*tables.TableUser, error)
+	ListUsers(ctx context.Context, search string, limit, offset int) ([]*tables.TableUser, int64, error)
+	UpdateUser(ctx context.Context, id string, updates map[string]any) (*tables.TableUser, error)
+	DeleteUser(ctx context.Context, id string) error
+	UpsertUserByEmail(ctx context.Context, email, name, authMethod string) (*tables.TableUser, error)
+
+	// RBAC
+	ListRoles(ctx context.Context) ([]*tables.TableRole, error)
+	GetRole(ctx context.Context, id string) (*tables.TableRole, error)
+	CreateRole(ctx context.Context, role *tables.TableRole) error
+	UpdateRole(ctx context.Context, id string, fields map[string]any) (*tables.TableRole, error)
+	DeleteRole(ctx context.Context, id string) error
+	GetRolePermissions(ctx context.Context, roleID string) ([]*tables.TablePermission, error)
+	SetRolePermissions(ctx context.Context, roleID string, permissionIDs []string) error
+	ListPermissions(ctx context.Context) ([]*tables.TablePermission, error)
+	AssignUserRole(ctx context.Context, userID, roleID string) error
+	RemoveUserRole(ctx context.Context, userID, roleID string) error
+	GetUserRoles(ctx context.Context, userID string) ([]*tables.TableRole, error)
+	GetUserPermissions(ctx context.Context, userID string) ([]*tables.TablePermission, error)
+
+	// SSO config management
+	CreateSSOConfig(ctx context.Context, cfg *tables.TableGovernanceSSOConfig) error
+	ListSSOConfigs(ctx context.Context) ([]*tables.TableGovernanceSSOConfig, error)
+	GetSSOConfig(ctx context.Context, id string) (*tables.TableGovernanceSSOConfig, error)
+	GetActiveSSOConfig(ctx context.Context) (*tables.TableGovernanceSSOConfig, error)
+	UpdateSSOConfig(ctx context.Context, id string, updates map[string]any) (*tables.TableGovernanceSSOConfig, error)
+	EnableSSOConfig(ctx context.Context, id string) error
+	DeleteSSOConfig(ctx context.Context, id string) error
+
+	// SSO nonce management
+	CreateSSONonce(ctx context.Context, state, codeVerifier, nonce, provider string, expiresAt time.Time) error
+	ConsumeAndDeleteSSONonce(ctx context.Context, state string) (*tables.TableGovernanceSSONonce, error)
+	DeleteExpiredSSONonces(ctx context.Context) error
+
 	// Customer CRUD
 	GetCustomers(ctx context.Context) ([]tables.TableCustomer, error)
 	GetCustomersPaginated(ctx context.Context, params CustomersQueryParams) ([]tables.TableCustomer, int64, error)

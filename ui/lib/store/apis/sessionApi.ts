@@ -12,6 +12,7 @@ export interface LoginResponse {
 export interface IsAuthEnabledResponse {
 	is_auth_enabled: boolean;
 	has_valid_token: boolean;
+	sso_enabled?: boolean;
 }
 
 export interface LogoutResponse {
@@ -27,6 +28,14 @@ export const sessionApi = baseApi.injectEndpoints({
 				url: "/session/is-auth-enabled",
 				method: "GET",
 			}),
+		}),
+		// Get current user session info
+		getSessionMe: builder.query<{ id: string; name?: string; email?: string }, void>({
+			query: () => ({
+				url: "/session/me",
+				method: "GET",
+			}),
+			providesTags: ["SessionMe"],
 		}),
 		// Login endpoint
 		login: builder.mutation<LoginResponse, LoginRequest>({
@@ -53,9 +62,9 @@ export const sessionApi = baseApi.injectEndpoints({
 					clearAuthStorage();
 				}
 			},
-			invalidatesTags: ["Config", "Providers", "Logs", "VirtualKeys", "Teams", "Customers", "Budgets", "RateLimits"],
+			invalidatesTags: ["Config", "Providers", "Logs", "VirtualKeys", "Teams", "Customers", "Budgets", "RateLimits", "SessionMe"],
 		}),
 	}),
 });
 
-export const { useIsAuthEnabledQuery, useLoginMutation, useLogoutMutation } = sessionApi;
+export const { useIsAuthEnabledQuery, useLoginMutation, useLogoutMutation, useGetSessionMeQuery } = sessionApi;

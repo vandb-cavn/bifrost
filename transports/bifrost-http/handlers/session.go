@@ -36,6 +36,7 @@ func (h *SessionHandler) RegisterRoutes(r *router.Router, middlewares ...schemas
 	r.POST("/api/session/login", lib.ChainMiddlewares(h.login, middlewares...))
 	r.POST("/api/session/logout", lib.ChainMiddlewares(h.logout, middlewares...))
 	r.GET("/api/session/is-auth-enabled", lib.ChainMiddlewares(h.isAuthEnabled, middlewares...))
+	r.GET("/api/session/me", lib.ChainMiddlewares(h.me, middlewares...))
 	r.POST("/api/session/ws-ticket", lib.ChainMiddlewares(h.issueWSTicket, middlewares...))
 }
 
@@ -44,6 +45,7 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 	if h.configStore == nil {
 		SendJSON(ctx, map[string]any{
 			"is_auth_enabled": false,
+			"sso_enabled":     false,
 		})
 		return
 	}
@@ -53,10 +55,7 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	if authConfig == nil {
-		SendJSON(ctx, map[string]any{
-			"is_auth_enabled": false,
-		})
-		return
+		authConfig = &configstore.AuthConfig{}
 	}
 	// Check if the header has a token and is valid (Authorization header or cookie)
 	token := ""
@@ -73,9 +72,16 @@ func (h *SessionHandler) isAuthEnabled(ctx *fasthttp.RequestCtx) {
 			hasValidToken = true
 		}
 	}
+	ssoEnabled := false
+	if h.configStore != nil {
+		if activeCfg, err := h.configStore.GetActiveSSOConfig(ctx); err == nil && activeCfg != nil {
+			ssoEnabled = true
+		}
+	}
 	SendJSON(ctx, map[string]any{
 		"is_auth_enabled": authConfig.IsEnabled,
 		"has_valid_token": hasValidToken,
+		"sso_enabled":     ssoEnabled,
 	})
 }
 
@@ -125,10 +131,11 @@ func (h *SessionHandler) login(ctx *fasthttp.RequestCtx) {
 	// Creating a new session
 	token := uuid.New().String()
 	session := &tables.SessionsTable{
-		Token:     token,
-		ExpiresAt: time.Now().Add(time.Hour * 24 * 30), // 30 days
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		Token:      token,
+		AuthMethod: "password",
+		ExpiresAt:  time.Now().Add(time.Hour * 24 * 30), // 30 days
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
 	err = h.configStore.CreateSession(ctx, session)
 	if err != nil {
@@ -209,7 +216,7 @@ func (h *SessionHandler) issueWSTicket(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusServiceUnavailable, "WebSocket tickets are not available")
 		return
 	}
-	sessionToken,ok := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
+	sessionToken, ok := ctx.UserValue(schemas.BifrostContextKeySessionToken).(string)
 	if !ok {
 		SendError(ctx, fasthttp.StatusUnauthorized, "Unauthorized")
 		return
@@ -226,5 +233,39 @@ func (h *SessionHandler) issueWSTicket(ctx *fasthttp.RequestCtx) {
 	}
 	SendJSON(ctx, map[string]any{
 		"ticket": ticket,
+	})
+}
+
+// me handles GET /api/session/me - Returns current logged-in user identity
+func (h *SessionHandler) me(ctx *fasthttp.RequestCtx) {
+	token := ""
+	if authHeader := string(ctx.Request.Header.Peek("Authorization")); strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	if token == "" {
+		token = string(ctx.Request.Header.Cookie("token"))
+	}
+	if token == "" {
+		SendError(ctx, fasthttp.StatusUnauthorized, "no session token")
+		return
+	}
+	session, err := h.configStore.GetSession(ctx, token)
+	if err != nil || session == nil || session.ExpiresAt.Before(time.Now()) {
+		SendError(ctx, fasthttp.StatusUnauthorized, "invalid or expired session")
+		return
+	}
+	if session.UserID == nil {
+		SendError(ctx, fasthttp.StatusUnauthorized, "session has no user")
+		return
+	}
+	user, err := h.configStore.GetUser(ctx, *session.UserID)
+	if err != nil || user == nil {
+		SendError(ctx, fasthttp.StatusNotFound, "user not found")
+		return
+	}
+	SendJSON(ctx, map[string]any{
+		"id":    user.ID,
+		"name":  user.Name,
+		"email": user.Email,
 	})
 }

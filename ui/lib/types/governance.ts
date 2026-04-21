@@ -48,6 +48,43 @@ export interface Customer {
 	rate_limit?: RateLimit;
 }
 
+export interface GovernanceUser {
+	id: string;
+	email: string;
+	name: string;
+	team_id?: string;
+	budget_id?: string;
+	rate_limit_id?: string;
+	auth_method: "password" | "oidc";
+	// Populated relationships
+	team?: Team;
+	budget?: Budget;
+	rate_limit?: RateLimit;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface SSOConfig {
+	id: string;
+	provider: "okta" | "entra" | "google" | "keycloak" | "oidc";
+	issuer_url: string;
+	client_id: string;
+	role_claim_key: string;
+	group_claim_key: string;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface CreateSSOConfigRequest {
+	provider: "okta" | "entra" | "google" | "keycloak" | "oidc";
+	issuer_url: string;
+	client_id: string;
+	client_secret: string;
+	role_claim_key?: string;
+	group_claim_key?: string;
+}
+
 export interface DBKey {
 	key_id: string; // UUID identifier for the key
 	name: string; // Name of the key
@@ -208,6 +245,21 @@ export interface UpdateCustomerRequest {
 	rate_limit?: UpdateRateLimitRequest;
 }
 
+export interface CreateUserRequest {
+	email: string;
+	name: string;
+	team_id?: string;
+	budget_id?: string;
+	rate_limit_id?: string;
+}
+
+export interface UpdateUserRequest {
+	name?: string;
+	team_id?: string | null;
+	budget_id?: string | null;
+	rate_limit_id?: string | null;
+}
+
 export interface CreateBudgetRequest {
 	max_limit: number; // In dollars
 	reset_duration: string; // e.g., "30s", "5m", "1h", "1d", "1w", "1M"
@@ -291,6 +343,17 @@ export interface GetCustomersResponse {
 	total_count: number;
 	limit: number;
 	offset: number;
+}
+
+export interface GetUsersParams {
+	limit?: number;
+	offset?: number;
+	search?: string;
+}
+
+export interface GetUsersResponse {
+	users: GovernanceUser[];
+	total_count: number;
 }
 
 export interface GetBudgetsResponse {
@@ -526,4 +589,32 @@ export interface UpdateProviderGovernanceRequest {
 export interface GetProviderGovernanceResponse {
 	providers: ProviderGovernance[];
 	count: number;
+}
+
+export interface Permission {
+	id: string;
+	resource: string;
+	operation: string;
+}
+
+export interface Role {
+	id: string;
+	name: string;
+	description: string;
+	is_system: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface MyPermissionsResponse {
+	is_admin: boolean;
+	permissions: Permission[];
+}
+
+export interface SetRolePermissionsRequest {
+	permission_ids: string[];
+}
+
+export interface AssignUserRoleRequest {
+	role_id: string;
 }

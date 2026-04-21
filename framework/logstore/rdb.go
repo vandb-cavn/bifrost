@@ -47,9 +47,9 @@ const (
 
 // RDBLogStore represents a log store that uses a SQLite database.
 type RDBLogStore struct {
-	db             *gorm.DB
-	logger         schemas.Logger
-	matViewsReady  atomic.Bool
+	db            *gorm.DB
+	logger        schemas.Logger
+	matViewsReady atomic.Bool
 }
 
 // generateBucketTimestamps generates all bucket timestamps for a time range.

@@ -378,7 +378,6 @@ func (a *Accumulator) cleanupStreamAccumulator(requestID string) {
 	}
 }
 
-
 // ProcessStreamingResponse processes a streaming response
 // It handles chat, audio, and responses streaming responses
 func (a *Accumulator) ProcessStreamingResponse(ctx *schemas.BifrostContext, result *schemas.BifrostResponse, bifrostErr *schemas.BifrostError) (*ProcessedStreamResponse, error) {
