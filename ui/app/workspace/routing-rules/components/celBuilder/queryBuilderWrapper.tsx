@@ -3,8 +3,6 @@
  * Provides styled wrapper with custom CSS for react-querybuilder
  */
 
-"use client";
-
 import { ReactNode } from "react";
 
 interface QueryBuilderWrapperProps {
@@ -14,7 +12,7 @@ interface QueryBuilderWrapperProps {
 export function QueryBuilderWrapper({ children }: QueryBuilderWrapperProps) {
 	return (
 		<div className="query-builder-wrapper">
-			<style jsx global>{`
+			<style>{`
 				.query-builder-wrapper .queryBuilder {
 					font-family: inherit;
 				}
