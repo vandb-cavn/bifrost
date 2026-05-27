@@ -100,6 +100,26 @@ func (r *RedisCounterClient) ResetRateLimit(ctx context.Context, rateLimitID str
 	return err
 }
 
+// ResetRateLimitTokens sets only the token counter to 0 with optional TTL.
+func (r *RedisCounterClient) ResetRateLimitTokens(ctx context.Context, rateLimitID string, ttlSeconds int64) error {
+	key := fmt.Sprintf(rateLimitTokensKeyFmt, rateLimitID)
+	var ttl time.Duration
+	if ttlSeconds > 0 {
+		ttl = time.Duration(ttlSeconds) * time.Second
+	}
+	return r.client.Set(ctx, key, 0, ttl).Err()
+}
+
+// ResetRateLimitRequests sets only the request counter to 0 with optional TTL.
+func (r *RedisCounterClient) ResetRateLimitRequests(ctx context.Context, rateLimitID string, ttlSeconds int64) error {
+	key := fmt.Sprintf(rateLimitRequestsKeyFmt, rateLimitID)
+	var ttl time.Duration
+	if ttlSeconds > 0 {
+		ttl = time.Duration(ttlSeconds) * time.Second
+	}
+	return r.client.Set(ctx, key, 0, ttl).Err()
+}
+
 // IncrBudget increments the budget spent counter.
 func (r *RedisCounterClient) IncrBudget(ctx context.Context, budgetID string, delta float64) (float64, error) {
 	key := fmt.Sprintf(budgetSpentKeyFmt, budgetID)

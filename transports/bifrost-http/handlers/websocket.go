@@ -13,6 +13,7 @@ import (
 	"github.com/fasthttp/router"
 	"github.com/fasthttp/websocket"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
 )
@@ -243,6 +244,41 @@ func (h *WebSocketHandler) BroadcastMarshaledMessage(data []byte) {
 			logger.Error("failed to send message to client: %v", err)
 		}
 	}
+}
+
+// BroadcastMCPLogUpdate sends an MCP tool log update to all connected WebSocket clients.
+func (h *WebSocketHandler) BroadcastMCPLogUpdate(logEntry *logstore.MCPToolLog) {
+	if logEntry == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("panic in BroadcastMCPLogUpdate: %v", r)
+		}
+	}()
+
+	operationType := "update"
+	if logEntry.Status == "processing" && logEntry.CreatedAt.Equal(logEntry.Timestamp) {
+		operationType = "create"
+	}
+
+	message := struct {
+		Type      string                `json:"type"`
+		Operation string                `json:"operation"`
+		Payload   *logstore.MCPToolLog `json:"payload"`
+	}{
+		Type:      "mcp_log",
+		Operation: operationType,
+		Payload:   logEntry,
+	}
+
+	data, err := sonic.Marshal(message)
+	if err != nil {
+		logger.Error("failed to marshal MCP log entry: %v", err)
+		return
+	}
+
+	h.BroadcastMarshaledMessage(data)
 }
 
 // StartHeartbeat starts sending periodic heartbeat messages to keep connections alive

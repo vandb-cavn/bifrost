@@ -110,10 +110,6 @@ func newGovernanceTestSQLiteRDB(t *testing.T) *configstore.RDBConfigStore {
 		&configstoreTables.TablePromptVersionMessage{},
 		&configstoreTables.TablePromptSession{},
 		&configstoreTables.TablePromptSessionMessage{},
-		&configstoreTables.TablePerUserOAuthPendingFlow{},
-		&configstoreTables.TablePerUserOAuthSession{},
-		&configstoreTables.TableOauthUserSession{},
-		&configstoreTables.TableOauthUserToken{},
 		&configstoreTables.TableModelConfig{},
 		&configstoreTables.TableRoutingRule{},
 	)

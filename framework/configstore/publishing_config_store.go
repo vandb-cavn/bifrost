@@ -142,8 +142,9 @@ func (pcs *PublishingConfigStore) UpdateVirtualKey(ctx context.Context, vk *tabl
 	return nil
 }
 
-func (pcs *PublishingConfigStore) DeleteVirtualKey(ctx context.Context, id string) error {
-	if err := pcs.ConfigStore.DeleteVirtualKey(ctx, id); err != nil {
+func (pcs *PublishingConfigStore) DeleteVirtualKey(ctx context.Context, id string, tx ...*gorm.DB) error {
+	ctx = ctxForTxnWrite(ctx, tx)
+	if err := pcs.ConfigStore.DeleteVirtualKey(ctx, id, tx...); err != nil {
 		return err
 	}
 	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
@@ -434,14 +435,6 @@ func (pcs *PublishingConfigStore) DeleteVirtualKeyMCPConfig(ctx context.Context,
 		return err
 	}
 	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
-	return nil
-}
-
-func (pcs *PublishingConfigStore) UpdateMCPClientDiscoveredTools(ctx context.Context, clientID string, tools map[string]schemas.ChatTool, toolNameMapping map[string]string) error {
-	if err := pcs.ConfigStore.UpdateMCPClientDiscoveredTools(ctx, clientID, tools, toolNameMapping); err != nil {
-		return err
-	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "mcp_client", Action: "upsert", ID: clientID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
