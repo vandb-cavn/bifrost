@@ -1,0 +1,116 @@
+---
+title: "Cấu hình cluster OSS (Redis)"
+description: "Khối cluster trong config.json: đồng bộ cấu hình qua Redis Streams và bộ đếm rate limit/budget dùng Redis cho nhiều node Bifrost OSS."
+icon: "network-wired"
+---
+
+## Tổng quan
+
+Từ phiên bản có hỗ trợ **multi-node OSS với PostgreSQL**, bạn có thể bật khối tùy chọn `cluster` trong `config.json`. Khi cấu hình đúng, mỗi node sẽ:
+
+- **Đồng bộ thay đổi cấu hình** (virtual key, provider, plugin, v.v.) qua **Redis Streams** — các node khác nhận sự kiện và reload runtime tương ứng.
+- **Dùng chung bộ đếm** cho rate limit và budget qua **Redis** (`INCRBY` / `INCRBYFLOAT`), phù hợp nhiều instance đằng sau load balancer.
+
+Nếu **không** khai báo `cluster` hoặc **không** cấu hình địa chỉ Redis (`redis.addr` / `redis.addrs` rỗng), Bifrost chạy **single-node** như trước — không ảnh hưởng đường code cũ.
+
+<Info>
+  Khối `cluster` này **khác** với cấu hình enterprise gossip (`cluster_config` trong schema enterprise). Đây là **OSS**: Redis Streams + Redis counters, dùng chung một PostgreSQL làm nguồn dữ liệu config.
+</Info>
+
+---
+
+## Điều kiện triển khai
+
+| Thành phần | Ghi chú |
+|------------|---------|
+| **config_store** | Bật và trỏ tới **cùng một** PostgreSQL cho mọi node. |
+| **Redis** | Một instance (standalone) hoặc **Redis Cluster** — tất cả node trỏ tới cùng Redis logic. |
+| **Load balancer** | Phân phối traffic tới các Bifrost; sticky session không bắt buộc cho phần sync config. |
+
+---
+
+## Khối `cluster` trong `config.json`
+
+Thêm vào **cùng cấp** với `client`, `providers`, `config_store`, … (đúng theo `$schema`):
+
+```json
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "cluster": {
+    "node_id": "bifrost-prod-1",
+    "strict_budgets": false,
+    "redis": {
+      "addr": "redis.internal:6379",
+      "password": "env.REDIS_PASSWORD",
+      "db": 0,
+      "pool_size": 20,
+      "cluster_mode": false,
+      "tls": {
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+### Thuộc tính
+
+| Trường | Kiểu | Mô tả |
+|--------|------|--------|
+| `node_id` | string | **Tùy chọn.** Định danh ổn định cho consumer Redis Stream (lưu cursor). Nên **duy nhất trên mỗi pod/instance**. Nếu để trống: dùng biến môi trường `BIFROST_NODE_ID`, sau đó `hostname`. |
+| `strict_budgets` | boolean | Mặc định `false`. Khi `true`, schema mô tả fallback ngân sách qua DB khi Redis không khả dụng (độ trễ cao hơn). Chỉ bật khi bạn hiểu trade-off. |
+| `redis.addr` | string | **Standalone:** `host:port`. Bỏ trống nếu chỉ dùng `addrs`. |
+| `redis.addrs` | string[] | **Redis Cluster:** danh sách seed. Nếu mảng không rỗng, **ưu tiên** hơn `addr`. |
+| `redis.cluster_mode` | boolean | `true` → client Redis Cluster; `false` → một node Redis đơn (`addr` hoặc phần tử đầu của `addrs`). |
+| `redis.password` | string | Có thể dùng `env.TÊN_BIẾN` như các trường khác trong config. |
+| `redis.db` | integer | Chỉ số DB Redis (standalone). **Bị bỏ qua** khi `cluster_mode: true`. |
+| `redis.pool_size` | integer | Kích thước pool kết nối (mặc định 20 nếu ≤ 0). |
+| `redis.tls` | object | `enabled`, `cert_file`, `key_file`, `ca_file` cho kết nối TLS tới Redis. |
+
+Chi tiết đầy đủ nằm trong schema: `transports/config.schema.json` → `$defs/oss_cluster_config`.
+
+---
+
+## Định danh node (`node_id` và env)
+
+- **Khuyến nghị:** gán `cluster.node_id` cố định cho từng replica (ví dụ `bifrost-prod-1`, `bifrost-prod-2`), hoặc inject qua template (Helm/Kubernetes).
+- **Thay thế:** đặt **`BIFROST_NODE_ID`** trên từng pod/container (ví dụ `metadata.name` của Pod).
+- Cursor consumer Redis được gắn với `ConsumerID()` — trùng `node_id` giữa hai process khác nhau có thể làm lệch đọc stream; **mỗi process chạy Bifrost phải có identity ổn định và khác nhau**.
+
+---
+
+## Hành vi khi khởi động
+
+1. Nếu **ping Redis thất bại** → Bifrost ghi log cảnh báo và chạy **không** bật multi-node (không bọc `PublishingConfigStore`, không subscriber stream) — tương đương single-node với Postgres.
+2. Nếu **ping OK** → bọc `ConfigStore` để publish sự kiện sau khi ghi DB thành công; chạy **recovery merge** bộ đếm Redis với baseline Postgres; sau đó bật đường đọc Redis cho rate limit/budget khi merge thành công.
+
+---
+
+## Ví dụ Redis Cluster
+
+```json
+"cluster": {
+  "node_id": "bifrost-az-a-1",
+  "redis": {
+    "addrs": [
+      "redis-0:6379",
+      "redis-1:6379",
+      "redis-2:6379"
+    ],
+    "cluster_mode": true,
+    "password": "env.REDIS_PASSWORD",
+    "pool_size": 32,
+    "tls": {
+      "enabled": true,
+      "ca_file": "/etc/bifrost/redis/ca.pem"
+    }
+  }
+}
+```
+
+---
+
+## Liên quan
+
+- Triển khai nhiều node **chỉ dùng file `config.json` chung** (không Postgres / không Redis): xem [Multinode Deployment](/deployment-guides/how-to/multinode).
+- Enterprise (gossip): [Clustering](/enterprise/clustering).
