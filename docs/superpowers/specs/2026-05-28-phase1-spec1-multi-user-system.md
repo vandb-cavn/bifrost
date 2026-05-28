@@ -36,10 +36,10 @@ updated_at     TIMESTAMP     NOT NULL
 Thêm một cột:
 
 ```
-user_id  VARCHAR(255)  NOT NULL  FK → users(id)
+user_id  VARCHAR(255)  nullable  -- Go type: *string, không có DB-level FK hay not null tag
 ```
 
-`NOT NULL` được vì sessions cũ được backfill về admin user trong cùng migration trước khi constraint được thêm.
+Logically required nhưng **không enforce bằng DB constraint** — cột nullable để tương thích với SQLite và Nhánh B (auth tắt). Postgres enforce NOT NULL ở Nhánh A sau khi backfill. Application enforce khi tạo session mới: `user_id` phải luôn được set (nếu null → 401, xem session flow bên dưới).
 
 ---
 
@@ -79,7 +79,11 @@ Migration phải rẽ nhánh theo `tx.Dialector.Name()` theo đúng pattern hi�
    (không cần UPDATE vì sessions luôn rỗng khi auth tắt — không có login)
 ```
 
-Hệ thống khởi động bình thường. Không ai login được vào dashboard cho đến khi admin tạo user đầu tiên qua API.
+Hệ thống khởi động bình thường.
+
+**Bootstrap admin đầu tiên ở Nhánh B:** Khi auth tắt (`is_auth_enabled = false`), `AuthMiddleware` set `IsLocalAdmin = true` và bypass mọi permission check (behavior hiện tại tại `middlewares.go:856-864`). Người vận hành bootstrap theo thứ tự: trong khi auth còn tắt → gọi `POST /api/users` để tạo admin đầu tiên → rồi enable auth.
+
+**Lưu ý:** Các annotation "Role: admin" trong phần API của spec này là *documented intent* — enforcement thực tế được implement ở Spec 2 (RBAC). Ở Phase 1, role được lưu vào DB nhưng chưa được check ở middleware.
 
 **Tại sao copy password_hash mà không hash lại:**
 `admin_password` trong `governance_config` đã là bcrypt hash (`lib/config.go` chỉ hash nếu `!isBcryptHash()`). Hash lần hai tạo `bcrypt(bcrypt(pw))` — login kế tiếp sẽ fail.
@@ -99,10 +103,11 @@ Mỗi request authenticated thực hiện theo thứ tự:
 
 ```
 1. Đọc token từ cookie "token" hoặc header "Authorization: Bearer <token>"
-2. Tra sessions table → lấy user_id
-3. Load user từ users table → lấy role + is_active
-4. Nếu is_active = false → 401 Unauthorized
-5. Gắn user vào request context để handler và middleware dùng
+2. Tra sessions table → lấy session
+3. Nếu session.user_id = null hoặc không tìm thấy session → 401  (edge case: session cũ/lạ)
+4. Load user từ users table WHERE id = session.user_id
+5. Nếu user không tồn tại hoặc is_active = false → 401 Unauthorized
+6. Gắn user vào request context để handler và middleware dùng
 ```
 
 Role không được cache trong session — luôn load fresh từ DB mỗi request. Thêm một DB query per request so với hiện tại (chấp nhận được với use case admin dashboard). Đảm bảo thay đổi role có hiệu lực ngay lập tức.
