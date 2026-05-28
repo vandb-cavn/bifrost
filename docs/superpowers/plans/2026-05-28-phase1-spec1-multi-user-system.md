@@ -242,7 +242,7 @@ git commit -m "feat(users): extend AuthConfig and ConfigStore interface with use
 ## Task 4: DB migration
 
 **Files:**
-- Modify: `framework/configstore/migrations.go` (add function + call at bottom of `RunMigration`)
+- Modify: `framework/configstore/migrations.go` (add function + call at bottom of `triggerMigrations`)
 
 - [ ] **Step 1: Write migration test**
 
@@ -250,55 +250,47 @@ Add to `framework/configstore/migrations_test.go`:
 
 ```go
 func TestMigrationAddUsersTableAndSessionUserID_BranchA(t *testing.T) {
-    // Branch A: admin credentials exist
     db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
     require.NoError(t, err)
-
-    // Pre-seed: run all migrations up to sessions table
     ctx := context.Background()
-    err = TriggerMigrations(ctx, db)
-    require.NoError(t, err)
 
-    // Seed admin credentials in governance_config
-    require.NoError(t, db.Exec("INSERT INTO governance_config (key, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
+    // Pre-requisites only: governance_config and sessions must exist for the migration to read/modify.
+    // Do NOT call triggerMigrations here — it would record add_users_table_and_session_user_id as
+    // already applied (governance_config is empty at that point = Branch B), making the direct call
+    // below a no-op and the admin-user assertion fail.
+    require.NoError(t, db.AutoMigrate(&tables.TableGovernanceConfig{}, &tables.SessionsTable{}))
+
+    // Seed admin credentials → triggers Branch A
+    require.NoError(t, db.Exec("INSERT INTO governance_config (key, value) VALUES (?, ?)",
         tables.ConfigAdminUsernameKey, "admin").Error)
-    require.NoError(t, db.Exec("INSERT INTO governance_config (key, value) VALUES (?, ?) ON CONFLICT DO NOTHING",
+    require.NoError(t, db.Exec("INSERT INTO governance_config (key, value) VALUES (?, ?)",
         tables.ConfigAdminPasswordKey, "$2a$10$fakehash").Error)
 
-    // Run only the new migration
-    err = migrationAddUsersTableAndSessionUserID(ctx, db)
-    require.NoError(t, err)
+    require.NoError(t, migrationAddUsersTableAndSessionUserID(ctx, db))
 
-    // users table exists
     assert.True(t, db.Migrator().HasTable(&tables.TableUser{}))
 
-    // admin user inserted
     var user tables.TableUser
-    err = db.Where("email = ?", "admin@localhost").First(&user).Error
-    require.NoError(t, err)
+    require.NoError(t, db.Where("email = ?", "admin@localhost").First(&user).Error)
     assert.Equal(t, "admin", user.Role)
     assert.Equal(t, "admin", user.Name)
     assert.True(t, user.IsActive)
     require.NotNil(t, user.PasswordHash)
     assert.Equal(t, "$2a$10$fakehash", *user.PasswordHash)
 
-    // sessions.user_id column exists
     exists, err := hasColumn(db, "sessions", "user_id")
     require.NoError(t, err)
     assert.True(t, exists)
 }
 
 func TestMigrationAddUsersTableAndSessionUserID_BranchB(t *testing.T) {
-    // Branch B: no admin credentials
     db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
     require.NoError(t, err)
-
     ctx := context.Background()
-    err = TriggerMigrations(ctx, db)
-    require.NoError(t, err)
 
-    err = migrationAddUsersTableAndSessionUserID(ctx, db)
-    require.NoError(t, err)
+    require.NoError(t, db.AutoMigrate(&tables.TableGovernanceConfig{}, &tables.SessionsTable{}))
+
+    require.NoError(t, migrationAddUsersTableAndSessionUserID(ctx, db))
 
     assert.True(t, db.Migrator().HasTable(&tables.TableUser{}))
 
@@ -314,16 +306,12 @@ func TestMigrationAddUsersTableAndSessionUserID_BranchB(t *testing.T) {
 func TestMigrationAddUsersTableAndSessionUserID_Idempotent(t *testing.T) {
     db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
     require.NoError(t, err)
-
     ctx := context.Background()
-    err = TriggerMigrations(ctx, db)
-    require.NoError(t, err)
 
-    // Run twice — should not error
-    err = migrationAddUsersTableAndSessionUserID(ctx, db)
-    require.NoError(t, err)
-    err = migrationAddUsersTableAndSessionUserID(ctx, db)
-    require.NoError(t, err)
+    require.NoError(t, db.AutoMigrate(&tables.TableGovernanceConfig{}, &tables.SessionsTable{}))
+
+    require.NoError(t, migrationAddUsersTableAndSessionUserID(ctx, db))
+    require.NoError(t, migrationAddUsersTableAndSessionUserID(ctx, db))
 }
 ```
 
@@ -440,9 +428,9 @@ func migrationAddUsersTableAndSessionUserID(ctx context.Context, db *gorm.DB) er
 }
 ```
 
-- [ ] **Step 4: Call the migration in `RunMigration`**
+- [ ] **Step 4: Call the migration in `triggerMigrations`**
 
-In `migrations.go`, find the end of `RunMigration` (just before the final `return nil`), add:
+In `migrations.go`, find the end of `triggerMigrations` (just before the final `return nil` at line ~810), add:
 
 ```go
 if err := migrationAddUsersTableAndSessionUserID(ctx, db); err != nil {
@@ -492,8 +480,9 @@ Near the top of `rdb.go`, after the existing `var ErrNotFound` declaration, add:
 
 ```go
 var (
-    ErrLastAdmin    = fmt.Errorf("cannot remove the last admin")
+    ErrLastAdmin       = fmt.Errorf("cannot remove the last admin")
     ErrLastActiveAdmin = fmt.Errorf("cannot deactivate the last admin")
+    ErrUserNotFound    = fmt.Errorf("user not found")
 )
 ```
 
@@ -599,6 +588,14 @@ func (s *RDBConfigStore) UpdateUser(ctx context.Context, user *tables.TableUser)
 // to prevent concurrent requests from both passing the last-admin guard.
 func (s *RDBConfigStore) UpdateUserActive(ctx context.Context, userID string, active bool) error {
     return s.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+        // Verify user exists first
+        var u tables.TableUser
+        if err := tx.First(&u, "id = ?", userID).Error; err != nil {
+            if errors.Is(err, gorm.ErrRecordNotFound) {
+                return ErrUserNotFound
+            }
+            return err
+        }
         if !active {
             // Acquire lock on all active admin rows before counting
             if tx.Dialector.Name() == "postgres" {
@@ -612,14 +609,8 @@ func (s *RDBConfigStore) UpdateUserActive(ctx context.Context, userID string, ac
                 Count(&adminCount).Error; err != nil {
                 return err
             }
-            if adminCount <= 1 {
-                var u tables.TableUser
-                if err := tx.First(&u, "id = ?", userID).Error; err != nil {
-                    return err
-                }
-                if u.Role == "admin" {
-                    return ErrLastActiveAdmin
-                }
+            if adminCount <= 1 && u.Role == "admin" {
+                return ErrLastActiveAdmin
             }
         }
         return tx.Model(&tables.TableUser{}).Where("id = ?", userID).Updates(map[string]any{
@@ -635,6 +626,9 @@ func (s *RDBConfigStore) UpdateUserRole(ctx context.Context, userID string, role
     return s.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
         var u tables.TableUser
         if err := tx.First(&u, "id = ?", userID).Error; err != nil {
+            if errors.Is(err, gorm.ErrRecordNotFound) {
+                return ErrUserNotFound
+            }
             return err
         }
         if u.Role == "admin" && role != "admin" {
@@ -720,10 +714,9 @@ func TestUserCRUD(t *testing.T) {
     require.NoError(t, err)
 
     ctx := context.Background()
-    require.NoError(t, TriggerMigrations(ctx, db))
+    require.NoError(t, triggerMigrations(ctx, db))
 
-    store, err := NewRDBConfigStore(ctx, db)
-    require.NoError(t, err)
+    store := NewRDBConfigStoreForTest(db) // one arg, no error return
 
     t.Run("CreateAndGetByEmail", func(t *testing.T) {
         hash := "$2a$10$fakehash"
@@ -876,6 +869,9 @@ if user == nil {
 }
 ctx.SetUserValue(schemas.BifrostContextKeySessionToken, token)
 ctx.SetUserValue(schemas.BifrostContextKeyCurrentUser, user)
+if user.Role == "admin" {
+    ctx.SetUserValue(schemas.IsLocalAdminContextKey, true)
+}
 next(ctx)
 return
 ```
@@ -886,9 +882,7 @@ Apply this pattern to all 4 locations:
 3. Cookie WS fallback (~line 914): replaces `validateSession(ctx, m.store, cookieToken)` check
 4. Bearer token path (~line 985): replaces `validateSession(ctx, m.store, token)` check
 
-Remove the `ctx.SetUserValue(schemas.IsLocalAdminContextKey, true)` lines from these call sites (those were placeholders; real user is now in context).
-
-Keep the `IsLocalAdmin = true` only in the two places where auth is disabled (lines 856-864) and in the Basic auth path (line 1017 — this is for inference-only clients that don't have user accounts yet).
+**Important — do NOT remove `IsLocalAdminContextKey` from the auth-disabled path (lines 856–864) or the Basic auth path (~line 1017).** `IsLocalAdminContextKey` is consumed by the enterprise RBAC layer (see `core/schemas/bifrost.go:329`); removing it before Spec 2 wires role checks would create a lockout window for admin users in enterprise builds. The new behaviour is: set it to `true` when the validated session belongs to an admin user; keep it set to `true` on the auth-disabled and Basic-auth paths as before.
 
 - [ ] **Step 4: Update `oauth2.go` call site**
 
@@ -1190,6 +1184,26 @@ func currentUser(ctx *fasthttp.RequestCtx) *tables.TableUser {
     return user
 }
 
+// isAdminCaller returns true when the caller is an admin user OR when auth is
+// disabled (IsLocalAdmin=true, which covers the Branch-B bootstrap path).
+func isAdminCaller(ctx *fasthttp.RequestCtx) bool {
+    if isLocal, _ := ctx.UserValue(schemas.IsLocalAdminContextKey).(bool); isLocal {
+        return true
+    }
+    user := currentUser(ctx)
+    return user != nil && user.Role == "admin"
+}
+
+// requireAdmin sends 403 and returns false if the caller is not an admin.
+// Use at the top of admin-only handlers.
+func requireAdmin(ctx *fasthttp.RequestCtx) bool {
+    if isAdminCaller(ctx) {
+        return true
+    }
+    SendError(ctx, fasthttp.StatusForbidden, "admin role required")
+    return false
+}
+
 // normalizeEmail lowercases and trims whitespace, returns "" if invalid.
 func normalizeEmail(email string) string {
     e := strings.ToLower(strings.TrimSpace(email))
@@ -1199,8 +1213,11 @@ func normalizeEmail(email string) string {
     return e
 }
 
-// listUsers handles GET /api/users — returns all users.
+// listUsers handles GET /api/users — admin only.
 func (h *UserHandler) listUsers(ctx *fasthttp.RequestCtx) {
+    if !requireAdmin(ctx) {
+        return
+    }
     users, err := h.configStore.ListUsers(ctx)
     if err != nil {
         SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to list users: %v", err))
@@ -1209,8 +1226,11 @@ func (h *UserHandler) listUsers(ctx *fasthttp.RequestCtx) {
     SendJSON(ctx, map[string]any{"users": users})
 }
 
-// createUser handles POST /api/users — creates a new user.
+// createUser handles POST /api/users — admin only.
 func (h *UserHandler) createUser(ctx *fasthttp.RequestCtx) {
+    if !requireAdmin(ctx) {
+        return
+    }
     payload := struct {
         Email    string `json:"email"`
         Name     string `json:"name"`
@@ -1274,18 +1294,36 @@ func (h *UserHandler) createUser(ctx *fasthttp.RequestCtx) {
 }
 
 // getMe handles GET /api/users/me — returns the current authenticated user.
+// When auth is disabled (IsLocalAdmin=true), returns a synthetic local-admin object
+// so the dashboard can render without a real users row.
 func (h *UserHandler) getMe(ctx *fasthttp.RequestCtx) {
     user := currentUser(ctx)
-    if user == nil {
-        SendError(ctx, fasthttp.StatusUnauthorized, "Unauthorized")
+    if user != nil {
+        SendJSON(ctx, user)
         return
     }
-    SendJSON(ctx, user)
+    if isLocal, _ := ctx.UserValue(schemas.IsLocalAdminContextKey).(bool); isLocal {
+        SendJSON(ctx, map[string]any{
+            "id":          "local-admin",
+            "email":       "",
+            "name":        "Local Admin",
+            "role":        "admin",
+            "is_active":   true,
+        })
+        return
+    }
+    SendError(ctx, fasthttp.StatusUnauthorized, "Unauthorized")
 }
 
-// getUser handles GET /api/users/:id — returns a single user.
+// getUser handles GET /api/users/:id — admin or the user themselves.
 func (h *UserHandler) getUser(ctx *fasthttp.RequestCtx) {
     id := ctx.UserValue("id").(string)
+    caller := currentUser(ctx)
+    isSelf := caller != nil && caller.ID == id
+    if !isSelf && !isAdminCaller(ctx) {
+        SendError(ctx, fasthttp.StatusForbidden, "admin role required")
+        return
+    }
     user, err := h.configStore.GetUserByID(ctx, id)
     if err != nil {
         SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get user: %v", err))
@@ -1298,9 +1336,15 @@ func (h *UserHandler) getUser(ctx *fasthttp.RequestCtx) {
     SendJSON(ctx, user)
 }
 
-// updateUser handles PUT /api/users/:id — updates name and/or email.
+// updateUser handles PUT /api/users/:id — admin or the user themselves.
 func (h *UserHandler) updateUser(ctx *fasthttp.RequestCtx) {
     id := ctx.UserValue("id").(string)
+    caller := currentUser(ctx)
+    isSelf := caller != nil && caller.ID == id
+    if !isSelf && !isAdminCaller(ctx) {
+        SendError(ctx, fasthttp.StatusForbidden, "admin role required")
+        return
+    }
     payload := struct {
         Name  *string `json:"name"`
         Email *string `json:"email"`
@@ -1342,8 +1386,11 @@ func (h *UserHandler) updateUser(ctx *fasthttp.RequestCtx) {
     SendJSON(ctx, user)
 }
 
-// updateRole handles PUT /api/users/:id/role
+// updateRole handles PUT /api/users/:id/role — admin only.
 func (h *UserHandler) updateRole(ctx *fasthttp.RequestCtx) {
+    if !requireAdmin(ctx) {
+        return
+    }
     id := ctx.UserValue("id").(string)
     caller := currentUser(ctx)
 
@@ -1368,17 +1415,28 @@ func (h *UserHandler) updateRole(ctx *fasthttp.RequestCtx) {
             SendError(ctx, fasthttp.StatusBadRequest, "cannot remove the last admin")
             return
         }
+        if err == configstore.ErrUserNotFound {
+            SendError(ctx, fasthttp.StatusNotFound, "user not found")
+            return
+        }
         SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to update role: %v", err))
         return
     }
     SendJSON(ctx, map[string]any{"message": "role updated"})
 }
 
-// updatePassword handles PUT /api/users/:id/password — two modes:
-// admin reset (new_password only) and self-change (current_password + new_password).
+// updatePassword handles PUT /api/users/:id/password — admin or the user themselves.
+// Admin reset: {new_password}. Self-change: {current_password, new_password}.
 func (h *UserHandler) updatePassword(ctx *fasthttp.RequestCtx) {
     id := ctx.UserValue("id").(string)
     caller := currentUser(ctx)
+    isSelf := caller != nil && caller.ID == id
+
+    // Enforce: only admin or the user themselves may call this endpoint
+    if !isSelf && !isAdminCaller(ctx) {
+        SendError(ctx, fasthttp.StatusForbidden, "admin role required")
+        return
+    }
 
     payload := struct {
         CurrentPassword *string `json:"current_password"`
@@ -1392,8 +1450,6 @@ func (h *UserHandler) updatePassword(ctx *fasthttp.RequestCtx) {
         SendError(ctx, fasthttp.StatusBadRequest, "password must be at least 8 characters")
         return
     }
-
-    isSelf := caller != nil && caller.ID == id
 
     if isSelf {
         // Self-change: verify current password
@@ -1440,8 +1496,11 @@ func (h *UserHandler) updatePassword(ctx *fasthttp.RequestCtx) {
     SendJSON(ctx, map[string]any{"message": "password updated"})
 }
 
-// updateActive handles PUT /api/users/:id/active
+// updateActive handles PUT /api/users/:id/active — admin only.
 func (h *UserHandler) updateActive(ctx *fasthttp.RequestCtx) {
+    if !requireAdmin(ctx) {
+        return
+    }
     id := ctx.UserValue("id").(string)
     caller := currentUser(ctx)
 
