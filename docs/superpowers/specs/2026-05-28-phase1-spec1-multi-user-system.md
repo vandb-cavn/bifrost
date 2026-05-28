@@ -45,41 +45,44 @@ user_id  VARCHAR(255)  NOT NULL  FK → users(id)
 
 ## Migration
 
-### DB Migration (một migration, một transaction)
+### DB Migration (một migration, dialect-aware)
 
-Migration phải **dialect-aware** theo đúng pattern hiện tại của codebase (`tx.Dialector.Name() == "sqlite"` / `"postgres"`). Không dùng DDL raw cho bước DROP DEFAULT — SQLite không hỗ trợ `ALTER COLUMN`.
+Migration phải rẽ nhánh theo `tx.Dialector.Name()` theo đúng pattern hiện tại. `user_id` **không dùng raw FK `REFERENCES`** — convention của codebase là cột varchar thường + GORM association tag, không phải DB-level FK constraint (xem `TableTeam.CustomerID`, `TableVirtualKey.TeamID`). Cách này cũng tránh conflict với giới hạn SQLite.
 
-**Thứ tự thực hiện:**
+**Nhánh A — có admin credentials** (`governance_config` có `admin_username` VÀ `admin_password`):
 
 ```
-1. CREATE TABLE users  (dùng AutoMigrate / CreateTable như các migration khác)
+1. CREATE TABLE users
 
-2. Nếu governance_config có admin_username VÀ admin_password:
-       INSERT INTO users:
-           id            = uuid mới
-           email         = "admin@localhost"
-           name          = governance_config["admin_username"]
-           role          = "admin"
-           password_hash = governance_config["admin_password"]  ← copy thẳng, KHÔNG hash lại
-           is_active     = true
+2. INSERT INTO users:
+       id            = uuid mới  (ghi nhớ là admin_uuid)
+       email         = "admin@localhost"
+       name          = governance_config["admin_username"]
+       role          = "admin"
+       password_hash = governance_config["admin_password"]  ← copy thẳng, KHÔNG hash lại
+       is_active     = true
 
-   Nếu KHÔNG có admin credentials (auth tắt hoặc chưa cấu hình):
-       Bỏ qua bước này — users table để rỗng, hệ thống chạy không auth
+3. ADD COLUMN sessions.user_id VARCHAR(255)   ← nullable, không REFERENCES
+   UPDATE sessions SET user_id = '<admin_uuid>'  ← backfill tất cả sessions cũ
 
-3. ADD COLUMN sessions.user_id VARCHAR(255) NOT NULL
-       DEFAULT '<admin_uuid>'   -- backfill sessions cũ về admin
-       REFERENCES users(id)
-
-4. DROP DEFAULT trên sessions.user_id:
-       - Postgres: ALTER TABLE sessions ALTER COLUMN user_id DROP DEFAULT
-       - SQLite: không cần (SQLite không lưu column default sau ADD COLUMN)
+4. Enforce NOT NULL (dialect-aware):
+       Postgres: ALTER TABLE sessions ALTER COLUMN user_id SET NOT NULL
+       SQLite:   bỏ qua — SQLite không hỗ trợ ALTER COLUMN; application enforces
 ```
+
+**Nhánh B — không có admin credentials** (auth tắt hoặc chưa cấu hình):
+
+```
+1. CREATE TABLE users  (để rỗng)
+
+2. ADD COLUMN sessions.user_id VARCHAR(255) nullable
+   (không cần UPDATE vì sessions luôn rỗng khi auth tắt — không có login)
+```
+
+Hệ thống khởi động bình thường. Không ai login được vào dashboard cho đến khi admin tạo user đầu tiên qua API.
 
 **Tại sao copy password_hash mà không hash lại:**
-`admin_password` trong `governance_config` đã là bcrypt hash. Hash lần hai sẽ tạo `bcrypt(bcrypt(pw))` — login sau đó sẽ fail. Copy thẳng giá trị đã hash là đúng.
-
-**Khi users table rỗng (không có admin credentials):**
-Hệ thống vẫn khởi động bình thường. Không có ai có thể login vào dashboard (đúng với behavior hiện tại khi auth tắt). Admin có thể enable auth và tạo user sau qua config.
+`admin_password` trong `governance_config` đã là bcrypt hash (`lib/config.go` chỉ hash nếu `!isBcryptHash()`). Hash lần hai tạo `bcrypt(bcrypt(pw))` — login kế tiếp sẽ fail.
 
 `admin_username` / `admin_password` trong `governance_config` **không bị xoá** sau migration — login handler ngừng đọc chúng nhưng chúng vẫn tồn tại để an toàn nếu cần rollback.
 
@@ -133,7 +136,9 @@ Max:     8760 giờ (1 năm)
 
 ## Cluster Sync
 
-Users là shared state — mutations (`CreateUser`, `UpdateUser`, `DeactivateUser`) phải đi qua `PublishingConfigStore` (hoặc tương đương) để propagate sang các peer nodes, giống các entity khác (virtual keys, teams). Không implement riêng sync protocol — thêm user CRUD methods vào `ConfigStore` interface và wrap trong `PublishingConfigStore` theo đúng pattern hiện tại.
+**Không cần thêm gì.** Cluster Bifrost dùng shared Postgres — users table đã consistent trên tất cả nodes. Vì session handler load user fresh từ DB mỗi request (không in-memory cache), thay đổi role hay deactivate trên Node A có hiệu lực ngay trên Node B ở request kế tiếp mà không cần event.
+
+`session_expiry_hours` đã được cover bởi `UpdateAuthConfig` → `scheduleEvent("auth_config", ...)` (đã có trong `PublishingConfigStore`). Các node reload `AuthConfig` khi nhận event này.
 
 ---
 
@@ -212,7 +217,22 @@ Rules:
 { "email": "admin@localhost", "password": "..." }
 ```
 
-Sau khi login thành công, response trả về thêm user info cơ bản:
+**4 bước xử lý login:**
+
+```
+1. Normalize email (lowercase, trim) → query users table WHERE email = ?
+2. Nếu không tìm thấy hoặc is_active = false → 401 "invalid email or password"
+   (không phân biệt "không tồn tại" vs "sai password" để tránh user enumeration)
+3. encrypt.CompareHash(user.password_hash, payload.password)
+   → nếu sai → 401 "invalid email or password"
+4. Tạo session:
+       token     = uuid mới
+       user_id   = user.id          ← bắt buộc set
+       expires_at = now + session_expiry_hours  ← đọc từ governance_config, KHÔNG hardcode
+   UPDATE users SET last_login_at = now WHERE id = user.id
+```
+
+Response khi thành công:
 ```json
 {
   "message": "Login successful",
@@ -220,7 +240,12 @@ Sau khi login thành công, response trả về thêm user info cơ bản:
 }
 ```
 
-**Breaking change với dashboard UI:** Form login của dashboard (file UI) đang gửi field `username`, cần đổi sang `email`. Phải update cả frontend.
+**Breaking change với dashboard UI:** Form login đang gửi field `username`, cần đổi sang `email`.
+
+**`session_expiry_hours` wiring** (xem thêm phần Files cần thay đổi):
+- `AuthConfig` struct cần thêm field `SessionExpiryHours int`
+- `GetAuthConfig` / `UpdateAuthConfig` trong `rdb.go` đọc/ghi key `session_expiry_hours` từ `governance_config`
+- Login handler đọc `authConfig.SessionExpiryHours` thay vì hardcode `time.Hour * 24 * 30` (hiện tại ở `session.go:142`)
 
 ---
 
@@ -269,12 +294,12 @@ Follow đúng pattern `SendJSON` / `SendError` hiện tại:
 | File | Loại thay đổi |
 |------|--------------|
 | `framework/configstore/tables/users.go` | Tạo mới — `TableUser` struct |
-| `framework/configstore/tables/sessions.go` | Thêm field `UserID` |
-| `framework/configstore/migrations.go` | Thêm migration mới (dialect-aware) |
-| `framework/configstore/store.go` | Thêm user CRUD methods vào `ConfigStore` interface |
-| `framework/configstore/rdb.go` | Implement user CRUD (bao gồm last-admin guard với transaction lock) |
-| `framework/configstore/publishing_config_store.go` | Wrap user CRUD methods để cluster sync |
-| `transports/bifrost-http/handlers/middlewares.go` | Refactor `validateSession` trả về user info, gắn vào context |
-| `transports/bifrost-http/handlers/session.go` | Đổi login dùng email, trả về user info trong response |
+| `framework/configstore/tables/sessions.go` | Thêm field `UserID *string` (nullable varchar, no FK tag) |
+| `framework/configstore/migrations.go` | Thêm migration mới (dialect-aware, 2 nhánh) |
+| `framework/configstore/store.go` | Thêm user CRUD vào `ConfigStore` interface; thêm `SessionExpiryHours int` vào `AuthConfig` struct |
+| `framework/configstore/rdb.go` | Implement user CRUD (last-admin guard với tx lock); cập nhật `GetAuthConfig`/`UpdateAuthConfig` để đọc/ghi `session_expiry_hours` |
+| `framework/configstore/publishing_config_store.go` | **Không cần thay đổi** — users đọc fresh từ shared DB, không có in-memory cache cần invalidate |
+| `transports/bifrost-http/handlers/middlewares.go` | Refactor `validateSession` → trả về `(*TableUser, error)`; gắn user vào request context ở tất cả call-site |
+| `transports/bifrost-http/handlers/session.go` | Login dùng email + 4 bước mới; đọc `session_expiry_hours` thay vì hardcode; trả về user info; route `/api/auth/settings` GET+PUT |
 | `transports/bifrost-http/handlers/users.go` | Tạo mới — handler cho `/api/users` endpoints |
 | `ui/` (login form) | Đổi field `username` → `email` trong form đăng nhập |
