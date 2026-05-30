@@ -256,3 +256,8 @@ func MaskSecret(s string) string {
 	}
 	return "****" + s[len(s)-4:]
 }
+
+// SetUserCtx sets the identity user on the fasthttp context.
+func SetUserCtx(ctx *fasthttp.RequestCtx, u *IdentityUser) {
+	ctx.SetUserValue(ctxKeyUser, u)
+}

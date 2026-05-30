@@ -19,6 +19,7 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
+	"github.com/maximhq/bifrost/transports/bifrost-http/identity"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
 )
@@ -543,6 +544,13 @@ func (h *ProviderHandler) listKeys(ctx *fasthttp.RequestCtx) {
 	if err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get keys: %v", err))
 		return
+	}
+
+	// FORK PATCH #2a: hide raw key values from viewers (see FORK_PATCHES.md)
+	if identity.IsViewer(ctx) {
+		for i := range keys {
+			keys[i].Value.Val = identity.MaskSecret(keys[i].Value.Val)
+		}
 	}
 
 	SendJSON(ctx, keys)

@@ -10,7 +10,9 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
+	"github.com/maximhq/bifrost/transports/bifrost-http/identity"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 )
 
@@ -546,5 +548,82 @@ func TestListModels_UsesCatalogAwareAliasMatchingForKeyAllowlist(t *testing.T) {
 
 	if resp.Total != 1 || len(resp.Models) != 1 || resp.Models[0].Name != "gpt-4o" {
 		t.Fatalf("expected gpt-4o to be matched through alias allowlist, got %#v", resp.Models)
+	}
+}
+
+func TestKeys_MaskedForViewer(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	rawKeyVal := "sk-1234567890abcdef"
+	key := schemas.Key{
+		ID:    "key-a",
+		Value: schemas.EnvVar{Val: rawKeyVal},
+	}
+	h := providerHandlerForTest(
+		schemas.OpenAI,
+		[]schemas.Key{key},
+		[]string{"gpt-4o"},
+		[]string{"gpt-4o"},
+	)
+
+	// 1. Operator (or Admin/default) request gets full key value
+	{
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.Header.SetMethod("GET")
+		ctx.Request.SetRequestURI("/api/providers/openai/keys")
+		ctx.SetUserValue("provider", "openai") // getProviderFromCtx looks at "provider"
+
+		h.listProviderKeys(ctx)
+		require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
+
+		var resp ListProviderKeysResponse
+		require.NoError(t, json.Unmarshal(ctx.Response.Body(), &resp))
+		require.Equal(t, 1, resp.Total)
+		require.Equal(t, "sk-1************************cdef", resp.Keys[0].Value.Val)
+	}
+
+	// 2. Viewer request gets masked key value
+	{
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.Header.SetMethod("GET")
+		ctx.Request.SetRequestURI("/api/providers/openai/keys")
+		ctx.SetUserValue("provider", "openai")
+
+		// Set viewer user on context
+		identity.SetUserCtx(ctx, &identity.IdentityUser{
+			Role:     identity.RoleViewer,
+			IsActive: true,
+		})
+
+		h.listProviderKeys(ctx)
+		require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
+
+		var resp ListProviderKeysResponse
+		require.NoError(t, json.Unmarshal(ctx.Response.Body(), &resp))
+		require.Equal(t, 1, resp.Total)
+		require.Equal(t, identity.MaskSecret("sk-1************************cdef"), resp.Keys[0].Value.Val)
+	}
+
+	// 3. getProviderKey is also masked for viewer
+	{
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.Header.SetMethod("GET")
+		ctx.Request.SetRequestURI("/api/providers/openai/keys/key-a")
+		ctx.SetUserValue("provider", "openai")
+		ctx.SetUserValue("key_id", "key-a")
+
+		// Set viewer user on context
+		identity.SetUserCtx(ctx, &identity.IdentityUser{
+			Role:     identity.RoleViewer,
+			IsActive: true,
+		})
+
+		h.getProviderKey(ctx)
+		require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode())
+
+		var respKey schemas.Key
+		require.NoError(t, json.Unmarshal(ctx.Response.Body(), &respKey))
+		require.Equal(t, "key-a", respKey.ID)
+		require.Equal(t, identity.MaskSecret("sk-1************************cdef"), respKey.Value.Val)
 	}
 }

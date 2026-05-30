@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/transports/bifrost-http/identity"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
 )
@@ -36,6 +37,13 @@ func (h *ProviderHandler) listProviderKeys(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	// FORK PATCH #2b: hide raw key values from viewers (see FORK_PATCHES.md)
+	if identity.IsViewer(ctx) {
+		for i := range keys {
+			keys[i].Value.Val = identity.MaskSecret(keys[i].Value.Val)
+		}
+	}
+
 	SendJSON(ctx, ListProviderKeysResponse{Keys: keys, Total: len(keys)})
 }
 
@@ -60,6 +68,11 @@ func (h *ProviderHandler) getProviderKey(ctx *fasthttp.RequestCtx) {
 		}
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("Failed to get provider key: %v", err))
 		return
+	}
+
+	// FORK PATCH #2c: hide raw key values from viewers (see FORK_PATCHES.md)
+	if identity.IsViewer(ctx) && key != nil {
+		key.Value.Val = identity.MaskSecret(key.Value.Val)
 	}
 
 	SendJSON(ctx, key)

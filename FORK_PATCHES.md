@@ -8,7 +8,7 @@ The only edits to upstream files are listed here. On `git merge upstream/main`, 
 - After `RegisterAPIRoutes(...)`, call `identity.Wire(s.Ctx, s.Router, s.Config.ConfigStore)`.
 - Add the `identity` import.
 
-## Patch #2 — viewer key masking (transports/bifrost-http/handlers/providers.go)
+## Patch #2 — viewer key masking (transports/bifrost-http/handlers/providers.go, transports/bifrost-http/handlers/provider_keys.go)
 - Hide raw key values when the request user is a viewer.
 
 ## Patch #3 — UI (ui/)
