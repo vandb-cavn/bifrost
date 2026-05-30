@@ -29,6 +29,7 @@ import (
 	"github.com/maximhq/bifrost/plugins/semanticcache"
 	"github.com/maximhq/bifrost/plugins/telemetry"
 	"github.com/maximhq/bifrost/transports/bifrost-http/handlers"
+	identity "github.com/maximhq/bifrost/transports/bifrost-http/identity"
 	"github.com/maximhq/bifrost/transports/bifrost-http/integrations"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
 	bfws "github.com/maximhq/bifrost/transports/bifrost-http/websocket"
@@ -1412,6 +1413,11 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		}
 		if ctx.Value(schemas.BifrostContextKeyIsEnterprise) == nil {
 			apiMiddlewares = append(apiMiddlewares, s.AuthMiddleware.APIMiddleware())
+			// FORK PATCH #1a: overlay identity/RBAC middleware (see FORK_PATCHES.md)
+			apiMiddlewares = append(apiMiddlewares, identity.Middlewares(s.Config.ConfigStore, func() bool {
+				cfg := s.AuthMiddleware != nil
+				return cfg
+			})...)
 		}
 	}
 	// Register routes
@@ -1422,6 +1428,10 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 			s.WSTicketStore = nil
 		}
 		return fmt.Errorf("failed to initialize routes: %v", err)
+	}
+	// FORK PATCH #1b: overlay routes + migration (see FORK_PATCHES.md)
+	if err := identity.Wire(s.Ctx, s.Router, s.Config.ConfigStore); err != nil {
+		return fmt.Errorf("failed to wire identity overlay: %v", err)
 	}
 	// Registering inference routes
 	if ctx.Value(schemas.BifrostContextKeyIsEnterprise) == nil && s.AuthMiddleware != nil {
