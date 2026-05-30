@@ -3,7 +3,6 @@ package identity
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -17,7 +16,8 @@ import (
 
 // ctxKeyUser carries the authenticated overlay user (own key; no core edit).
 const ctxKeyUser schemas.BifrostContextKey = "identity-authenticated-user"
-const IsLocalAdminContextKey = schemas.BifrostContextKeyIsLocalAdmin
+
+var IsLocalAdminContextKey = schemas.BifrostContextKeyIsLocalAdmin
 
 
 func sendJSON(ctx *fasthttp.RequestCtx, code int, v any) {
@@ -110,6 +110,7 @@ func (o *Overlay) handleLogin(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	if err := o.store.MapSession(context.Background(), token, u.ID); err != nil {
+		_ = o.configStore.DeleteSession(context.Background(), token)
 		sendErr(ctx, fasthttp.StatusInternalServerError, "failed to map session")
 		return
 	}
@@ -144,15 +145,7 @@ type Overlay struct {
 }
 
 func (o *Overlay) sessionExpiryHours() int {
-	var val string
-	err := o.store.db.Table("governance_config").Where("key = ?", "session_expiry_hours").Select("value").Scan(&val).Error
-	if err == nil && val != "" {
-		var hrs int
-		if _, err := fmt.Sscanf(val, "%d", &hrs); err == nil && hrs > 0 {
-			return hrs
-		}
-	}
-	return 720
+	return o.store.GetSessionExpiryHours(context.Background())
 }
 
 func hashPassword(pw string) (string, error)     { return encrypt.Hash(pw) }

@@ -28,13 +28,13 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		}
 	}
 
-	// Already migrated?
-	var existing IdentityUser
-	err := db.First(&existing, "email = ?", "admin@localhost").Error
-	if err == nil {
-		return nil // admin already seeded
+	// Already migrated? Check the migration marker in governance_config.
+	var marker tables.TableGovernanceConfig
+	err := db.First(&marker, "key = ?", "identity_migrated").Error
+	if err == nil && marker.Value == "true" {
+		return nil // already migrated
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 
@@ -51,7 +51,13 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 		}
 	}
 	if username == nil || password == nil || *username == "" || *password == "" {
-		return nil // Branch B: no legacy admin (auth disabled / fresh) — tables ready, nothing to seed
+		// Branch B: no legacy admin (auth disabled / fresh) — tables ready, nothing to seed.
+		// Still write the migration marker so we don't try to seed later if legacy config gets populated.
+		mRow := tables.TableGovernanceConfig{Key: "identity_migrated", Value: "true"}
+		if err := db.Save(&mRow).Error; err != nil {
+			return err
+		}
+		return nil
 	}
 
 	adminID := uuid.New().String()
@@ -77,6 +83,13 @@ func Migrate(ctx context.Context, db *gorm.DB) error {
 			return err
 		}
 	}
+
+	// Mark as migrated
+	mRow := tables.TableGovernanceConfig{Key: "identity_migrated", Value: "true"}
+	if err := db.Save(&mRow).Error; err != nil {
+		return err
+	}
+
 	return nil
 }
 

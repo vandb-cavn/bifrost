@@ -12,7 +12,6 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/valyala/fasthttp"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 func (o *Overlay) listUsers(ctx *fasthttp.RequestCtx) {
@@ -33,6 +32,14 @@ func (o *Overlay) me(ctx *fasthttp.RequestCtx) {
 }
 
 func (o *Overlay) createUser(ctx *fasthttp.RequestCtx) {
+	// Defense-in-depth: only admin or local-admin can create users
+	caller := userFrom(ctx)
+	isLocalAdmin, _ := ctx.UserValue(IsLocalAdminContextKey).(bool)
+	if !isLocalAdmin && (caller == nil || caller.Role != RoleAdmin) {
+		sendErr(ctx, 403, "forbidden: admin only")
+		return
+	}
+
 	var p struct{ Email, Name, Role, Password string }
 	if err := json.Unmarshal(ctx.PostBody(), &p); err != nil {
 		sendErr(ctx, 400, "invalid request format")
@@ -129,26 +136,7 @@ func (o *Overlay) setRole(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	var u IdentityUser
-	err := o.store.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&u, "id = ?", id).Error; err != nil {
-			return err
-		}
-		if u.Role == RoleAdmin && p.Role != RoleAdmin {
-			var count int64
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(&IdentityUser{}).
-				Where("role = ? AND is_active = ?", RoleAdmin, true).Count(&count).Error; err != nil {
-				return err
-			}
-			if count <= 1 {
-				return errors.New("cannot remove the last admin")
-			}
-		}
-		u.Role = p.Role
-		u.UpdatedAt = time.Now()
-		return tx.Save(&u).Error
-	})
-
+	u, err := o.store.SetRoleTx(context.Background(), id, p.Role)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			sendErr(ctx, 404, "user not found")
@@ -161,7 +149,7 @@ func (o *Overlay) setRole(ctx *fasthttp.RequestCtx) {
 		sendErr(ctx, 500, "failed to update role")
 		return
 	}
-	sendJSON(ctx, 200, &u)
+	sendJSON(ctx, 200, u)
 }
 
 func (o *Overlay) setActive(ctx *fasthttp.RequestCtx) {
@@ -176,26 +164,7 @@ func (o *Overlay) setActive(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	var u IdentityUser
-	err := o.store.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&u, "id = ?", id).Error; err != nil {
-			return err
-		}
-		if !p.Active && u.Role == RoleAdmin {
-			var count int64
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Model(&IdentityUser{}).
-				Where("role = ? AND is_active = ?", RoleAdmin, true).Count(&count).Error; err != nil {
-				return err
-			}
-			if count <= 1 {
-				return errors.New("cannot deactivate the last admin")
-			}
-		}
-		u.IsActive = p.Active
-		u.UpdatedAt = time.Now()
-		return tx.Save(&u).Error
-	})
-
+	u, err := o.store.SetActiveTx(context.Background(), id, p.Active)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			sendErr(ctx, 404, "user not found")
@@ -208,7 +177,7 @@ func (o *Overlay) setActive(ctx *fasthttp.RequestCtx) {
 		sendErr(ctx, 500, "failed to update user")
 		return
 	}
-	sendJSON(ctx, 200, &u)
+	sendJSON(ctx, 200, u)
 }
 
 func (o *Overlay) setPassword(ctx *fasthttp.RequestCtx) {
@@ -259,7 +228,12 @@ func (o *Overlay) setPassword(ctx *fasthttp.RequestCtx) {
 		sendErr(ctx, 500, "failed to update password")
 		return
 	}
-	_ = o.store.UnmapAllForUser(context.Background(), u.ID) // invalidate this user's sessions
+	if isSelf {
+		tok := tokenFromRequest(ctx)
+		_ = o.store.UnmapAllButCurrentForUser(context.Background(), u.ID, tok)
+	} else {
+		_ = o.store.UnmapAllForUser(context.Background(), u.ID)
+	}
 	sendJSON(ctx, 200, map[string]any{"message": "password updated"})
 }
 

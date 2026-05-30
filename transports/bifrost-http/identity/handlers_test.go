@@ -16,9 +16,19 @@ import (
 func TestCreateUser_Guards(t *testing.T) {
 	o := newOverlayUnderTest(t)
 
+	// 0. Defense-in-depth check: unauthorized request fails
+	{
+		rc := &fasthttp.RequestCtx{}
+		rc.Request.SetBody([]byte(`{"email":"test@example.com","name":"Test","role":"viewer","password":"password123"}`))
+		o.createUser(rc)
+		assert.Equal(t, 403, rc.Response.StatusCode())
+		assert.Contains(t, string(rc.Response.Body()), "forbidden: admin only")
+	}
+
 	// 1. Password too short
 	{
 		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue(IsLocalAdminContextKey, true)
 		rc.Request.SetBody([]byte(`{"email":"test@example.com","name":"Test","role":"viewer","password":"short"}`))
 		o.createUser(rc)
 		assert.Equal(t, 400, rc.Response.StatusCode())
@@ -28,6 +38,7 @@ func TestCreateUser_Guards(t *testing.T) {
 	// 2. Invalid role
 	{
 		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue(IsLocalAdminContextKey, true)
 		rc.Request.SetBody([]byte(`{"email":"test@example.com","name":"Test","role":"superadmin","password":"password123"}`))
 		o.createUser(rc)
 		assert.Equal(t, 400, rc.Response.StatusCode())
@@ -37,6 +48,7 @@ func TestCreateUser_Guards(t *testing.T) {
 	// 3. Invalid email
 	{
 		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue(IsLocalAdminContextKey, true)
 		rc.Request.SetBody([]byte(`{"email":"invalid-email","name":"Test","role":"viewer","password":"password123"}`))
 		o.createUser(rc)
 		assert.Equal(t, 400, rc.Response.StatusCode())
@@ -46,6 +58,7 @@ func TestCreateUser_Guards(t *testing.T) {
 	// 4. Successful creation
 	{
 		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue(IsLocalAdminContextKey, true)
 		rc.Request.SetBody([]byte(`{"email":"test@example.com","name":"Test","role":"viewer","password":"password123"}`))
 		o.createUser(rc)
 		assert.Equal(t, 200, rc.Response.StatusCode())
@@ -61,6 +74,7 @@ func TestCreateUser_Guards(t *testing.T) {
 	// 5. Duplicate email
 	{
 		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue(IsLocalAdminContextKey, true)
 		rc.Request.SetBody([]byte(`{"email":"test@example.com","name":"Test2","role":"viewer","password":"password123"}`))
 		o.createUser(rc)
 		assert.Equal(t, 409, rc.Response.StatusCode())
@@ -276,6 +290,12 @@ func TestAuthSettings_Guards(t *testing.T) {
 }
 
 func TestSetRole_Concurrency(t *testing.T) {
+	// NOTE: clause.Locking{Strength: "UPDATE"} is silently ignored by GORM on SQLite.
+	// This concurrency test passes on SQLite only because the test database configures
+	// SetMaxOpenConns(1), which serializes all concurrent database writes.
+	// On PostgreSQL, GORM translates clause.Locking to "SELECT ... FOR UPDATE" which
+	// locks the targeted rows and forces real serialization at the database layer,
+	// validating the acceptance criterion on production environments.
 	o := newOverlayUnderTest(t)
 	ctx := context.Background()
 
@@ -358,6 +378,12 @@ func TestSetRole_Concurrency(t *testing.T) {
 }
 
 func TestSetActive_Concurrency(t *testing.T) {
+	// NOTE: clause.Locking{Strength: "UPDATE"} is silently ignored by GORM on SQLite.
+	// This concurrency test passes on SQLite only because the test database configures
+	// SetMaxOpenConns(1), which serializes all concurrent database writes.
+	// On PostgreSQL, GORM translates clause.Locking to "SELECT ... FOR UPDATE" which
+	// locks the targeted rows and forces real serialization at the database layer,
+	// validating the acceptance criterion on production environments.
 	o := newOverlayUnderTest(t)
 	ctx := context.Background()
 
