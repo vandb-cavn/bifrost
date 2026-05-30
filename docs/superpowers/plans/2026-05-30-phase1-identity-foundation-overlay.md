@@ -1359,6 +1359,32 @@ git commit -m "docs: finalize fork patch audit for phase 1 identity overlay"
 **Known trade-offs / execution-time confirmations:**
 - `Middlewares`/`Wire` type-assert `ConfigStore` → `*RDBConfigStore`; if a deployment uses a different store, the overlay is inactive (returns nil) — acceptable for this fork, but confirm the runtime store is RDB-backed.
 - Overlay-route middleware wrapping (Task 6 Step 2 note) must be confirmed against how `apiMiddlewares` actually reach `s.Router`-registered routes; wrap overlay routes with the overlay middlewares to be safe.
-- Self password-change clears all that user's session maps (not all-but-current) — matches the prior plan's accepted simplification.
 - Task 7 field names + Task 8 component path require in-repo confirmation at execution (flagged in those tasks).
 - Logout: core's logout deletes the core session; the `identity_sessions` row is left orphaned (harmless; optionally GC later or intercept logout in `IdentityMiddleware`).
+
+---
+
+## Review Rounds & Security/Architecture Remediations
+
+### 🔴 HIGH — Stale Admin Credential Resurrection (Fixed)
+- **Problem**: The migration ran on every boot directly (outside of `gormigrate`). Its only idempotency guard was checking if `admin@localhost` existed. If the admin updated their email to `alice@corp.com`, a subsequent boot would recreate `admin@localhost` with the legacy default password, creating an unauthorized backdoor.
+- **Fix**: Gated the single-admin migration logic on a dedicated persistent DB marker (`identity_migrated = "true"`) in the `governance_config` table. Once the initial admin migration runs or is configured, the migration will never run again, regardless of whether `admin@localhost` changes or is deleted.
+
+### 🟠 MEDIUM — Concurrency Testing & SQLite Lock Limitations (Documented)
+- **Problem**: GORM's `clause.Locking{Strength: "UPDATE"}` is a no-op on SQLite (as SQLite lacks `SELECT ... FOR UPDATE` support). Concurrency tests (`TestSetRole_Concurrency`, `TestSetActive_Concurrency`) passed on SQLite only because `SetMaxOpenConns(1)` serialized concurrent writes, giving false confidence.
+- **Fix**: Added explicit comments in the test suite documenting this SQLite limitation. This notes that while the tests serialize under `SetMaxOpenConns(1)` in SQLite, they generate correct `SELECT ... FOR UPDATE` statements on production PostgreSQL to validate real row-level lock concurrency.
+
+### 🟠 MEDIUM — Store Layer Abstraction Violations (Fixed)
+- **Problem**: HTTP handlers reached past the Store abstraction to execute GORM transactions (`o.store.db.Transaction`), row-locking clauses, and raw table scans. Similarly, middleware query logic directly read from the `governance_config` table. This broke the encapsulation of DB concerns.
+- **Fix**: Refactored all direct GORM query, transaction, and locking logic out of `handlers.go` and `middleware.go`. Moved them into clear, dedicated `Store` methods:
+  - `SetRoleTx(ctx, id, role)`: Updates a user's role safely under a PostgreSQL row-locked transaction.
+  - `SetActiveTx(ctx, id, active)`: Updates a user's active status safely under a PostgreSQL row-locked transaction.
+  - `GetSessionExpiryHours(ctx)`: Encapsulates governance-config lookup for session expiry.
+  - `UnmapAllForUser(ctx, userID)`: Clear session mapping and its associated core session on password change/deactivation.
+  - `UnmapAllButCurrentForUser(ctx, userID, currentToken)`: Cleanly supports spec §3.3.
+
+### 🟡 LOW — Security Hardening, Compliance, & Leaks (Fixed)
+- **Defense-In-Depth inside `createUser`**: Added a local-admin check directly within `createUser` as a fail-safe. Even if a routing or middleware configuration mistake exposes the `/api/users` endpoint, the handler itself rejects unauthorized requests.
+- **Self Password-Change Compliance (Spec §3.3)**: Integrated `UnmapAllButCurrentForUser` so a self password-change keeps the current user's session active while invalidating all other devices.
+- **Core Session Row Leaks**: Added logic to `handleLogin` to delete the core session row if the identity mapping fails, preventing persistent orphan records.
+- **Core Constant Reference**: Changed local-admin context bypass check to reference the core constant `schemas.BifrostContextKeyIsLocalAdmin` mapped to package local `IsLocalAdminContextKey` to prevent upstream drift.
