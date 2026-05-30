@@ -17,6 +17,8 @@ import (
 
 // ctxKeyUser carries the authenticated overlay user (own key; no core edit).
 const ctxKeyUser schemas.BifrostContextKey = "identity-authenticated-user"
+const IsLocalAdminContextKey schemas.BifrostContextKey = "is_local_admin"
+
 
 func sendJSON(ctx *fasthttp.RequestCtx, code int, v any) {
 	ctx.Response.Header.SetContentType("application/json")
@@ -155,3 +157,102 @@ func (o *Overlay) sessionExpiryHours() int {
 
 func hashPassword(pw string) (string, error)     { return encrypt.Hash(pw) }
 func compareHash(hash, pw string) (bool, error)  { return encrypt.CompareHash(hash, pw) }
+
+func roleRank(role string) int {
+	switch role {
+	case RoleAdmin:
+		return 3
+	case RoleOperator:
+		return 2
+	case RoleViewer:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// requiredRank maps (method, path) → minimum role rank. Fail-closed for unknown
+// /api/* routes (mutation→admin, read→operator). Self user-routes return viewer
+// rank so the handler can enforce self-vs-admin.
+func requiredRank(method, path string) int {
+	mutation := method != "GET"
+	if path == "/api/users/me" {
+		return roleRank(RoleViewer)
+	}
+	if strings.HasPrefix(path, "/api/users/") {
+		if strings.HasSuffix(path, "/role") || strings.HasSuffix(path, "/active") {
+			return roleRank(RoleAdmin)
+		}
+		return roleRank(RoleViewer) // handler enforces self-or-admin
+	}
+	for _, p := range []string{"/api/users", "/api/auth", "/api/config", "/api/scim"} {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return roleRank(RoleAdmin)
+		}
+	}
+	for _, p := range []string{
+		"/api/providers", "/api/keys", "/api/governance", "/api/mcp", "/api/mcp-logs",
+		"/api/plugins", "/api/proxy-config", "/api/cache", "/api/models", "/api/pricing",
+		"/api/prompt-repo", "/api/feature-flags", "/api/oauth",
+	} {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			if mutation {
+				return roleRank(RoleOperator)
+			}
+			return roleRank(RoleViewer)
+		}
+	}
+	if path == "/api/logs" || strings.HasPrefix(path, "/api/logs/") {
+		return roleRank(RoleViewer)
+	}
+	if mutation {
+		return roleRank(RoleAdmin)
+	}
+	return roleRank(RoleOperator)
+}
+
+// RBACMiddleware authorizes /api/* by role. Runs after IdentityMiddleware.
+func (o *Overlay) RBACMiddleware() schemas.BifrostHTTPMiddleware {
+	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
+		return func(ctx *fasthttp.RequestCtx) {
+			if !o.authEnabled() {
+				next(ctx)
+				return
+			}
+			// Core marks local-admin (auth disabled / bootstrap) — bypass.
+			if v, ok := ctx.UserValue(IsLocalAdminContextKey).(bool); ok && v {
+				next(ctx)
+				return
+			}
+			path := string(ctx.Path())
+			if !strings.HasPrefix(path, "/api/") {
+				next(ctx)
+				return
+			}
+			u := userFrom(ctx)
+			if u == nil {
+				next(ctx) // public/whitelisted /api routes (login, health) carry no user
+				return
+			}
+			if roleRank(u.Role) < requiredRank(string(ctx.Method()), path) {
+				sendErr(ctx, fasthttp.StatusForbidden, "forbidden: this action requires a higher role")
+				return
+			}
+			next(ctx)
+		}
+	}
+}
+
+// IsViewer reports whether the request's overlay user is a viewer.
+func IsViewer(ctx *fasthttp.RequestCtx) bool {
+	u := userFrom(ctx)
+	return u != nil && u.Role == RoleViewer
+}
+
+// MaskSecret returns a masked form (last 4 chars).
+func MaskSecret(s string) string {
+	if len(s) <= 4 {
+		return "****"
+	}
+	return "****" + s[len(s)-4:]
+}
