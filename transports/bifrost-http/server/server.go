@@ -1430,7 +1430,7 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize routes: %v", err)
 	}
 	// FORK PATCH #1b: overlay routes + migration (see FORK_PATCHES.md)
-	if err := identity.Wire(s.Ctx, s.Router, s.Config.ConfigStore); err != nil {
+	if err := identity.Wire(s.Ctx, s.Router, s.Config.ConfigStore, func() bool { return s.AuthMiddleware != nil }, apiMiddlewares...); err != nil {
 		return fmt.Errorf("failed to wire identity overlay: %v", err)
 	}
 	// Registering inference routes

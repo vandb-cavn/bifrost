@@ -34,7 +34,7 @@ func Middlewares(store configstore.ConfigStore, authEnabled func() bool) []schem
 
 // Wire runs the overlay's DB migration and registers its routes on the shared
 // router. Call once during bootstrap, after core routes are registered.
-func Wire(ctx context.Context, r *router.Router, store configstore.ConfigStore) error {
+func Wire(ctx context.Context, r *router.Router, store configstore.ConfigStore, authEnabled func() bool, middlewares ...schemas.BifrostHTTPMiddleware) error {
 	// 1. Migration (own tables) via the core-provided connection.
 	if err := store.RunMigration(ctx, func(ctx context.Context, db *gorm.DB) error {
 		return Migrate(ctx, db)
@@ -42,22 +42,21 @@ func Wire(ctx context.Context, r *router.Router, store configstore.ConfigStore) 
 		return fmt.Errorf("identity migration failed: %w", err)
 	}
 	// 2. Routes on the shared router.
-	o, err := newOverlay(store, func() bool { return true })
+	o, err := newOverlay(store, authEnabled)
 	if err != nil {
 		return err
 	}
-	// Wrap overlay routes explicitly with IdentityMiddleware + RBACMiddleware so that
-	// they are consistently authorized, as they are registered directly on s.Router.
-	mw := []schemas.BifrostHTTPMiddleware{o.IdentityMiddleware(), o.RBACMiddleware()}
-	r.GET("/api/users", lib.ChainMiddlewares(o.listUsers, mw...))
-	r.POST("/api/users", lib.ChainMiddlewares(o.createUser, mw...))
-	r.GET("/api/users/me", lib.ChainMiddlewares(o.me, mw...))
-	r.GET("/api/users/{id}", lib.ChainMiddlewares(o.getUser, mw...))
-	r.PUT("/api/users/{id}", lib.ChainMiddlewares(o.updateUser, mw...))
-	r.PUT("/api/users/{id}/role", lib.ChainMiddlewares(o.setRole, mw...))
-	r.PUT("/api/users/{id}/password", lib.ChainMiddlewares(o.setPassword, mw...))
-	r.PUT("/api/users/{id}/active", lib.ChainMiddlewares(o.setActive, mw...))
-	r.GET("/api/auth/settings", lib.ChainMiddlewares(o.getAuthSettings, mw...))
-	r.PUT("/api/auth/settings", lib.ChainMiddlewares(o.putAuthSettings, mw...))
+	// Wrap overlay routes with the passed-in middlewares chain (which includes core AuthMiddleware
+	// and the overlay's identity/RBAC middlewares).
+	r.GET("/api/users", lib.ChainMiddlewares(o.listUsers, middlewares...))
+	r.POST("/api/users", lib.ChainMiddlewares(o.createUser, middlewares...))
+	r.GET("/api/users/me", lib.ChainMiddlewares(o.me, middlewares...))
+	r.GET("/api/users/{id}", lib.ChainMiddlewares(o.getUser, middlewares...))
+	r.PUT("/api/users/{id}", lib.ChainMiddlewares(o.updateUser, middlewares...))
+	r.PUT("/api/users/{id}/role", lib.ChainMiddlewares(o.setRole, middlewares...))
+	r.PUT("/api/users/{id}/password", lib.ChainMiddlewares(o.setPassword, middlewares...))
+	r.PUT("/api/users/{id}/active", lib.ChainMiddlewares(o.setActive, middlewares...))
+	r.GET("/api/auth/settings", lib.ChainMiddlewares(o.getAuthSettings, middlewares...))
+	r.PUT("/api/auth/settings", lib.ChainMiddlewares(o.putAuthSettings, middlewares...))
 	return nil
 }

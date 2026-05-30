@@ -17,7 +17,7 @@ import (
 
 // ctxKeyUser carries the authenticated overlay user (own key; no core edit).
 const ctxKeyUser schemas.BifrostContextKey = "identity-authenticated-user"
-const IsLocalAdminContextKey schemas.BifrostContextKey = "is_local_admin"
+const IsLocalAdminContextKey = schemas.BifrostContextKeyIsLocalAdmin
 
 
 func sendJSON(ctx *fasthttp.RequestCtx, code int, v any) {
@@ -211,6 +211,16 @@ func requiredRank(method, path string) int {
 	return roleRank(RoleOperator)
 }
 
+func isPublicRoute(path string) bool {
+	if path == "/api/session/is-auth-enabled" || path == "/api/session/login" || path == "/health" {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/oauth/callback") {
+		return true
+	}
+	return false
+}
+
 // RBACMiddleware authorizes /api/* by role. Runs after IdentityMiddleware.
 func (o *Overlay) RBACMiddleware() schemas.BifrostHTTPMiddleware {
 	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
@@ -231,7 +241,11 @@ func (o *Overlay) RBACMiddleware() schemas.BifrostHTTPMiddleware {
 			}
 			u := userFrom(ctx)
 			if u == nil {
-				next(ctx) // public/whitelisted /api routes (login, health) carry no user
+				if isPublicRoute(path) {
+					next(ctx)
+					return
+				}
+				sendErr(ctx, fasthttp.StatusUnauthorized, "unauthorized: authentication required")
 				return
 			}
 			if roleRank(u.Role) < requiredRank(string(ctx.Method()), path) {

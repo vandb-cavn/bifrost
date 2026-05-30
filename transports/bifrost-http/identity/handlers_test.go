@@ -3,6 +3,8 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/maximhq/bifrost/framework/encrypt"
@@ -271,4 +273,167 @@ func TestAuthSettings_Guards(t *testing.T) {
 		assert.Equal(t, 200, rc.Response.StatusCode())
 		assert.Contains(t, string(rc.Response.Body()), `"session_expiry_hours":240`)
 	}
+}
+
+func TestSetRole_Concurrency(t *testing.T) {
+	o := newOverlayUnderTest(t)
+	ctx := context.Background()
+
+	// Seed two active admin users: admin1 and admin2
+	admin1 := &IdentityUser{ID: "admin1", Email: "admin1@x.com", Name: "Admin1", Role: RoleAdmin, IsActive: true}
+	admin2 := &IdentityUser{ID: "admin2", Email: "admin2@x.com", Name: "Admin2", Role: RoleAdmin, IsActive: true}
+	require.NoError(t, o.store.CreateUser(ctx, admin1))
+	require.NoError(t, o.store.CreateUser(ctx, admin2))
+
+	const numGoroutines = 2
+	statusChan := make(chan int, numGoroutines)
+	bodyChan := make(chan string, numGoroutines)
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	// Goroutine 1 tries to demote admin1
+	go func() {
+		defer wg.Done()
+		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue("id", "admin1")
+		rc.SetUserValue(ctxKeyUser, &IdentityUser{ID: "caller_admin", Role: RoleAdmin})
+		rc.Request.SetBody([]byte(`{"role":"viewer"}`))
+		o.setRole(rc)
+		statusChan <- rc.Response.StatusCode()
+		bodyChan <- string(rc.Response.Body())
+	}()
+
+	// Goroutine 2 tries to demote admin2
+	go func() {
+		defer wg.Done()
+		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue("id", "admin2")
+		rc.SetUserValue(ctxKeyUser, &IdentityUser{ID: "caller_admin", Role: RoleAdmin})
+		rc.Request.SetBody([]byte(`{"role":"viewer"}`))
+		o.setRole(rc)
+		statusChan <- rc.Response.StatusCode()
+		bodyChan <- string(rc.Response.Body())
+	}()
+
+	wg.Wait()
+	close(statusChan)
+	close(bodyChan)
+
+	var successCount, failureCount int
+	var errorMsgs []string
+
+	for status := range statusChan {
+		if status == 200 {
+			successCount++
+		} else if status == 400 {
+			failureCount++
+		}
+	}
+
+	for body := range bodyChan {
+		if strings.Contains(body, "cannot remove the last admin") {
+			errorMsgs = append(errorMsgs, body)
+		}
+	}
+
+	assert.Equal(t, 1, successCount, "Exactly one demotion should succeed")
+	assert.Equal(t, 1, failureCount, "Exactly one demotion should fail")
+	assert.Len(t, errorMsgs, 1, "Exactly one error message about last admin should be returned")
+
+	// Verify DB state: exactly one of them is viewer, the other remains admin
+	dbAdmin1, err := o.store.GetUserByID(ctx, "admin1")
+	require.NoError(t, err)
+	dbAdmin2, err := o.store.GetUserByID(ctx, "admin2")
+	require.NoError(t, err)
+
+	roles := map[string]string{
+		"admin1": dbAdmin1.Role,
+		"admin2": dbAdmin2.Role,
+	}
+
+	assert.True(t, (roles["admin1"] == RoleAdmin && roles["admin2"] == RoleViewer) ||
+		(roles["admin1"] == RoleViewer && roles["admin2"] == RoleAdmin),
+		"Exactly one user must remain admin and one must be demoted")
+}
+
+func TestSetActive_Concurrency(t *testing.T) {
+	o := newOverlayUnderTest(t)
+	ctx := context.Background()
+
+	// Seed two active admin users: admin1 and admin2
+	admin1 := &IdentityUser{ID: "admin1", Email: "admin1@x.com", Name: "Admin1", Role: RoleAdmin, IsActive: true}
+	admin2 := &IdentityUser{ID: "admin2", Email: "admin2@x.com", Name: "Admin2", Role: RoleAdmin, IsActive: true}
+	require.NoError(t, o.store.CreateUser(ctx, admin1))
+	require.NoError(t, o.store.CreateUser(ctx, admin2))
+
+	const numGoroutines = 2
+	statusChan := make(chan int, numGoroutines)
+	bodyChan := make(chan string, numGoroutines)
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	// Goroutine 1 tries to deactivate admin1
+	go func() {
+		defer wg.Done()
+		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue("id", "admin1")
+		rc.SetUserValue(ctxKeyUser, &IdentityUser{ID: "caller_admin", Role: RoleAdmin})
+		rc.Request.SetBody([]byte(`{"active":false}`))
+		o.setActive(rc)
+		statusChan <- rc.Response.StatusCode()
+		bodyChan <- string(rc.Response.Body())
+	}()
+
+	// Goroutine 2 tries to deactivate admin2
+	go func() {
+		defer wg.Done()
+		rc := &fasthttp.RequestCtx{}
+		rc.SetUserValue("id", "admin2")
+		rc.SetUserValue(ctxKeyUser, &IdentityUser{ID: "caller_admin", Role: RoleAdmin})
+		rc.Request.SetBody([]byte(`{"active":false}`))
+		o.setActive(rc)
+		statusChan <- rc.Response.StatusCode()
+		bodyChan <- string(rc.Response.Body())
+	}()
+
+	wg.Wait()
+	close(statusChan)
+	close(bodyChan)
+
+	var successCount, failureCount int
+	var errorMsgs []string
+
+	for status := range statusChan {
+		if status == 200 {
+			successCount++
+		} else if status == 400 {
+			failureCount++
+		}
+	}
+
+	for body := range bodyChan {
+		if strings.Contains(body, "cannot deactivate the last admin") {
+			errorMsgs = append(errorMsgs, body)
+		}
+	}
+
+	assert.Equal(t, 1, successCount, "Exactly one deactivation should succeed")
+	assert.Equal(t, 1, failureCount, "Exactly one deactivation should fail")
+	assert.Len(t, errorMsgs, 1, "Exactly one error message about deactivating last admin should be returned")
+
+	// Verify DB state: exactly one of them is inactive, the other remains active
+	dbAdmin1, err := o.store.GetUserByID(ctx, "admin1")
+	require.NoError(t, err)
+	dbAdmin2, err := o.store.GetUserByID(ctx, "admin2")
+	require.NoError(t, err)
+
+	states := map[string]bool{
+		"admin1": dbAdmin1.IsActive,
+		"admin2": dbAdmin2.IsActive,
+	}
+
+	assert.True(t, (states["admin1"] && !states["admin2"]) || (!states["admin1"] && states["admin2"]),
+		"Exactly one user must remain active and one must be deactivated")
 }

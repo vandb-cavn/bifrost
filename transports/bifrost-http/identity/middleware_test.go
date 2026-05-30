@@ -65,3 +65,65 @@ func TestIdentityMiddleware_LoginIntercept(t *testing.T) {
 	assert.Equal(t, 200, rc.Response.StatusCode())
 	assert.Contains(t, string(rc.Response.Body()), `"role":"admin"`)
 }
+
+func TestRBACMiddleware_FailClosed(t *testing.T) {
+	o := newOverlayUnderTest(t)
+
+	// Case 1: Unauthenticated request to /api/users should be rejected (401 Unauthorized)
+	{
+		rc := &fasthttp.RequestCtx{}
+		rc.Request.Header.SetMethod("GET")
+		rc.Request.SetRequestURI("/api/users")
+
+		coreCalled := false
+		h := o.RBACMiddleware()(func(c *fasthttp.RequestCtx) { coreCalled = true })
+		h(rc)
+
+		assert.False(t, coreCalled)
+		assert.Equal(t, 401, rc.Response.StatusCode())
+		assert.Contains(t, string(rc.Response.Body()), "unauthorized: authentication required")
+	}
+
+	// Case 2: Unauthenticated request to /api/session/login should pass
+	{
+		rc := &fasthttp.RequestCtx{}
+		rc.Request.Header.SetMethod("POST")
+		rc.Request.SetRequestURI("/api/session/login")
+
+		coreCalled := false
+		h := o.RBACMiddleware()(func(c *fasthttp.RequestCtx) { coreCalled = true })
+		h(rc)
+
+		assert.True(t, coreCalled)
+	}
+
+	// Case 3: Authenticated request with insufficient role to /api/users should be rejected (403 Forbidden)
+	{
+		rc := &fasthttp.RequestCtx{}
+		rc.Request.Header.SetMethod("GET")
+		rc.Request.SetRequestURI("/api/users")
+		rc.SetUserValue(ctxKeyUser, &IdentityUser{ID: "viewer1", Role: RoleViewer})
+
+		coreCalled := false
+		h := o.RBACMiddleware()(func(c *fasthttp.RequestCtx) { coreCalled = true })
+		h(rc)
+
+		assert.False(t, coreCalled)
+		assert.Equal(t, 403, rc.Response.StatusCode())
+		assert.Contains(t, string(rc.Response.Body()), "forbidden: this action requires a higher role")
+	}
+
+	// Case 4: Authenticated request with sufficient role to /api/users should pass
+	{
+		rc := &fasthttp.RequestCtx{}
+		rc.Request.Header.SetMethod("GET")
+		rc.Request.SetRequestURI("/api/users")
+		rc.SetUserValue(ctxKeyUser, &IdentityUser{ID: "admin1", Role: RoleAdmin})
+
+		coreCalled := false
+		h := o.RBACMiddleware()(func(c *fasthttp.RequestCtx) { coreCalled = true })
+		h(rc)
+
+		assert.True(t, coreCalled)
+	}
+}
