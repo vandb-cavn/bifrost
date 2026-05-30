@@ -1,7 +1,7 @@
 import { baseApi, clearAuthStorage } from "./baseApi";
 
 export interface LoginRequest {
-	username: string;
+	email: string;
 	password: string;
 }
 

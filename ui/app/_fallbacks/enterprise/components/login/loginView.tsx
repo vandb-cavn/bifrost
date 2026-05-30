@@ -30,7 +30,7 @@ const externalLinks = [
 export default function LoginView() {
 	const { resolvedTheme } = useTheme();
 	const [mounted, setMounted] = useState(false);
-	const [username, setUsername] = useState("");
+	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [showPassword, setShowPassword] = useState(false);
 	const [errorMessage, setErrorMessage] = useState("");
@@ -68,7 +68,7 @@ export default function LoginView() {
 		e.preventDefault();
 		setErrorMessage("");
 		try {
-			await login({ username, password }).unwrap();
+			await login({ email, password }).unwrap();
 			// Cookie is set automatically by the server response — just navigate
 			navigate({ to: "/workspace" });
 		} catch (error) {
@@ -118,18 +118,18 @@ export default function LoginView() {
 						{errorMessage && <div className="bg-destructive/10 text-destructive rounded-sm p-3 text-sm">{errorMessage}</div>}
 
 						<div className="space-y-2">
-							<Label htmlFor="username" className="text-sm font-medium">
-								Username
+							<Label htmlFor="email" className="text-sm font-medium">
+								Email
 							</Label>
 							<Input
-								id="username"
-								type="text"
-								placeholder="Enter your username"
-								value={username}
-								onChange={(e) => setUsername(e.target.value)}
+								id="email"
+								type="email"
+								placeholder="Enter your email"
+								value={email}
+								onChange={(e) => setEmail(e.target.value)}
 								required
 								className="text-sm"
-								autoComplete="username"
+								autoComplete="email"
 							/>
 						</div>
 

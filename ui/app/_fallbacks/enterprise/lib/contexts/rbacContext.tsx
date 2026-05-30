@@ -1,4 +1,5 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
+import { useIsAuthEnabledQuery, useGetMeQuery } from "@/lib/store/apis";
 
 // RBAC Resource Names (must match backend definitions)
 export enum RbacResource {
@@ -47,15 +48,74 @@ interface RbacContextType {
 
 const RbacContext = createContext<RbacContextType | null>(null);
 
-// Dummy provider that allows all permissions
+// Admin-restricted resources
+const ADMIN_RESTRICTED_RESOURCES = new Set<RbacResource>([
+	RbacResource.Users,
+	RbacResource.UserProvisioning,
+	RbacResource.RBAC,
+	RbacResource.AccessProfiles,
+	RbacResource.Settings,
+]);
+
+// Real RBAC Provider
 export function RbacProvider({ children }: { children: React.ReactNode }) {
+	const { data: authData, isLoading: isAuthLoading } = useIsAuthEnabledQuery();
+	const { data: user, isLoading: isMeLoading, refetch } = useGetMeQuery(undefined, {
+		skip: authData && !authData.is_auth_enabled,
+	});
+
+	const isAllowed = (resource: RbacResource, operation: RbacOperation): boolean => {
+		// If auth is disabled, allow everything
+		if (authData && !authData.is_auth_enabled) {
+			return true;
+		}
+
+		// If loading auth or user, or no user in auth-enabled context, deny everything (fail-closed)
+		if (isAuthLoading || isMeLoading || !user) {
+			return false;
+		}
+
+		const role = user.role;
+
+		// admin has full access
+		if (role === "admin") {
+			return true;
+		}
+
+		// operator has access to everything except admin-restricted resources
+		if (role === "operator") {
+			if (ADMIN_RESTRICTED_RESOURCES.has(resource)) {
+				return false;
+			}
+			return true;
+		}
+
+		// viewer has view/read-only access on non-admin resources
+		if (role === "viewer") {
+			if (ADMIN_RESTRICTED_RESOURCES.has(resource)) {
+				return false;
+			}
+			return operation === RbacOperation.Read || operation === RbacOperation.View;
+		}
+
+		return false;
+	};
+
+	const permissions = useMemo(() => {
+		const map: Record<string, Record<string, boolean>> = {};
+		if (!user) return map;
+		return map;
+	}, [user]);
+
 	return (
 		<RbacContext.Provider
 			value={{
-				isAllowed: () => true, // Always allow in OSS
-				permissions: {},
-				isLoading: false,
-				refetch: () => {},
+				isAllowed,
+				permissions,
+				isLoading: isAuthLoading || isMeLoading,
+				refetch: () => {
+					refetch();
+				},
 			}}
 		>
 			{children}
@@ -63,9 +123,13 @@ export function RbacProvider({ children }: { children: React.ReactNode }) {
 	);
 }
 
-// Hook that always returns true (no restrictions in OSS)
-export function useRbac(_resource: RbacResource, _operation: RbacOperation): boolean {
-	return true;
+// Hook to check individual permission
+export function useRbac(resource: RbacResource, operation: RbacOperation): boolean {
+	const context = useContext(RbacContext);
+	if (!context) {
+		return true; // Default fallback for OSS context with no provider
+	}
+	return context.isAllowed(resource, operation);
 }
 
 // Hook to access full RBAC context
