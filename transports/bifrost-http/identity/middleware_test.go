@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
+	"gorm.io/gorm"
 )
 
 type fakeConfigStore struct {
@@ -25,6 +26,10 @@ func (f *fakeConfigStore) CreateSession(ctx context.Context, s *tables.SessionsT
 
 func (f *fakeConfigStore) GetAuthConfig(ctx context.Context) (*configstore.AuthConfig, error) {
 	return &configstore.AuthConfig{IsEnabled: true}, nil
+}
+
+func (f *fakeConfigStore) UpdateConfig(ctx context.Context, config *tables.TableGovernanceConfig, tx ...*gorm.DB) error {
+	return nil
 }
 
 func newOverlayUnderTest(t *testing.T) *Overlay {
