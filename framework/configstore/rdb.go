@@ -35,17 +35,6 @@ type RDBConfigStore struct {
 	refreshPoolFn    func(ctx context.Context) error
 }
 
-// NewRDBConfigStoreForTest returns an RDBConfigStore over an existing *gorm.DB.
-// The database must already be migrated for the tables the test exercises.
-func NewRDBConfigStoreForTest(db *gorm.DB) *RDBConfigStore {
-	if db == nil {
-		panic("configstore: NewRDBConfigStoreForTest(nil)")
-	}
-	s := &RDBConfigStore{logger: nil}
-	s.db.Store(db)
-	return s
-}
-
 // getWeight safely dereferences a *float64 weight pointer, returning 1.0 as default if nil.
 // This allows distinguishing between "not set" (nil -> 1.0) and "explicitly set to 0" (0.0).
 func getWeight(w *float64) float64 {
