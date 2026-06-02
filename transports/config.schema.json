@@ -4869,7 +4869,26 @@
 			"additionalProperties": false,
 			"properties": {
 				"node_id": {
-					"type": "string",
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "object",
+							"properties": {
+								"value": {
+									"type": "string"
+								},
+								"env_var": {
+									"type": "string"
+								},
+								"from_env": {
+									"type": "boolean"
+								}
+							},
+							"additionalProperties": false
+						}
+					],
 					"description": "Stable consumer identity across restarts for Redis stream cursor persistence. Falls back to BIFROST_NODE_ID env var, then os.Hostname()."
 				},
 				"strict_budgets": {
@@ -4883,13 +4902,51 @@
 					"additionalProperties": false,
 					"properties": {
 						"addr": {
-							"type": "string",
+							"anyOf": [
+								{
+									"type": "string"
+								},
+								{
+									"type": "object",
+									"properties": {
+										"value": {
+											"type": "string"
+										},
+										"env_var": {
+											"type": "string"
+										},
+										"from_env": {
+											"type": "boolean"
+										}
+									},
+									"additionalProperties": false
+								}
+							],
 							"description": "Redis address (host:port) for standalone mode."
 						},
 						"addrs": {
 							"type": "array",
 							"items": {
-								"type": "string"
+								"anyOf": [
+									{
+										"type": "string"
+									},
+									{
+										"type": "object",
+										"properties": {
+											"value": {
+												"type": "string"
+											},
+											"env_var": {
+												"type": "string"
+											},
+											"from_env": {
+												"type": "boolean"
+											}
+										},
+										"additionalProperties": false
+									}
+								]
 							},
 							"description": "Seed addresses for Redis Cluster (used when non-empty; overrides addr)."
 						},
@@ -4899,7 +4956,26 @@
 							"default": false
 						},
 						"password": {
-							"type": "string",
+							"anyOf": [
+								{
+									"type": "string"
+								},
+								{
+									"type": "object",
+									"properties": {
+										"value": {
+											"type": "string"
+										},
+										"env_var": {
+											"type": "string"
+										},
+										"from_env": {
+											"type": "boolean"
+										}
+									},
+									"additionalProperties": false
+								}
+							],
 							"description": "Redis AUTH password."
 						},
 						"db": {
