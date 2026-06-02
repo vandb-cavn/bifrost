@@ -465,58 +465,94 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 	case configstore.EventTypeProvider:
 		if event.Action == configstore.ActionDelete {
 			skipCtx := context.WithValue(ctx, schemas.BifrostContextKeySkipDBUpdate, true)
-			_ = s.RemoveProvider(skipCtx, schemas.ModelProvider(event.ID))
+			if err := s.RemoveProvider(skipCtx, schemas.ModelProvider(event.ID)); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_, _ = s.ReloadProvider(ctx, schemas.ModelProvider(event.ID))
+			if _, err := s.ReloadProvider(ctx, schemas.ModelProvider(event.ID)); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypeVirtualKey:
 		if event.Action == configstore.ActionDelete {
-			_ = s.RemoveVirtualKey(ctx, event.ID)
+			if err := s.RemoveVirtualKey(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_, _ = s.ReloadVirtualKey(ctx, event.ID)
+			if _, err := s.ReloadVirtualKey(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypeTeam:
 		if event.Action == configstore.ActionDelete {
-			_ = s.RemoveTeam(ctx, event.ID)
+			if err := s.RemoveTeam(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_, _ = s.ReloadTeam(ctx, event.ID)
+			if _, err := s.ReloadTeam(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypeCustomer:
 		if event.Action == configstore.ActionDelete {
-			_ = s.RemoveCustomer(ctx, event.ID)
+			if err := s.RemoveCustomer(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_, _ = s.ReloadCustomer(ctx, event.ID)
+			if _, err := s.ReloadCustomer(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypeModelConfig:
 		if event.Action == configstore.ActionDelete {
-			_ = s.RemoveModelConfig(ctx, event.ID)
+			if err := s.RemoveModelConfig(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_, _ = s.ReloadModelConfig(ctx, event.ID)
+			if _, err := s.ReloadModelConfig(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypeRoutingRule:
 		if event.Action == configstore.ActionDelete {
-			_ = s.RemoveRoutingRule(ctx, event.ID)
+			if err := s.RemoveRoutingRule(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_ = s.ReloadRoutingRule(ctx, event.ID)
+			if err := s.ReloadRoutingRule(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypeMCPClient:
 		if event.Action == configstore.ActionDelete {
-			_ = s.RemoveMCPClient(ctx, event.ID)
+			if err := s.RemoveMCPClient(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
-			_ = s.ReconnectMCPClient(ctx, event.ID)
+			if err := s.ReconnectMCPClient(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		}
 	case configstore.EventTypePlugin:
 		if event.Action == configstore.ActionDelete {
 			if st, ok := s.Config.GetPluginStatusByName(event.ID); ok {
-				_ = s.RemovePlugin(ctx, st.Name)
+				if err := s.RemovePlugin(ctx, st.Name); err != nil {
+					logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+				}
 			}
 		} else {
 			if p, err := s.Config.ConfigStore.GetPlugin(ctx, event.ID); err == nil && p != nil {
-				_ = s.ReloadPlugin(ctx, event.ID, p.Path, p.Config, p.Placement, p.Order)
+				if err := s.ReloadPlugin(ctx, event.ID, p.Path, p.Config, p.Placement, p.Order); err != nil {
+					logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+				}
+			} else if err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
 			}
 		}
 	case configstore.EventTypeClientConfig:
-		_ = s.ReloadClientConfigFromConfigStore(ctx)
+		if err := s.ReloadClientConfigFromConfigStore(ctx); err != nil {
+			logger.Warn("cluster: apply %s/%s failed: %v", event.Type, event.Action, err)
+		}
 	case configstore.EventTypeAuthConfig:
 		// Read from DB; update AuthMiddleware in-memory only. Do NOT call s.UpdateAuthConfig —
 		// that method also writes to DB, which would cause a double-write on peer nodes.
@@ -531,7 +567,9 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		// ReloadProxyConfig is in-memory only (sets s.Config.ProxyConfig).
 		// (nil, nil) from GetProxyConfig means no proxy in DB — pass nil through to clear RAM.
 		if config, err := s.Config.ConfigStore.GetProxyConfig(ctx); err == nil {
-			_ = s.ReloadProxyConfig(ctx, config)
+			if err := s.ReloadProxyConfig(ctx, config); err != nil {
+				logger.Warn("cluster: apply %s/%s failed: %v", event.Type, event.Action, err)
+			}
 		} else {
 			logger.Warn("cluster: proxy config reload failed: %v", err)
 		}
@@ -551,10 +589,14 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 	case configstore.EventTypePricingOverride:
 		// UpsertPricingOverride / DeletePricingOverride are in-memory only — safe on peer nodes.
 		if event.Action == configstore.ActionDelete {
-			_ = s.DeletePricingOverride(ctx, event.ID)
+			if err := s.DeletePricingOverride(ctx, event.ID); err != nil {
+				logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+			}
 		} else {
 			if override, err := s.Config.ConfigStore.GetPricingOverrideByID(ctx, event.ID); err == nil && override != nil {
-				_ = s.UpsertPricingOverride(ctx, override)
+				if err := s.UpsertPricingOverride(ctx, override); err != nil {
+					logger.Warn("cluster: apply %s/%s id=%s failed: %v", event.Type, event.Action, event.ID, err)
+				}
 			} else if err != nil {
 				logger.Warn("cluster: pricing override %s reload failed: %v", event.ID, err)
 			}
