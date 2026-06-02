@@ -16,6 +16,11 @@ const (
 	budgetSpentKeyFmt       = "bifrost:budget:%s:spent"
 )
 
+func rlTokenKey(id string) string   { return fmt.Sprintf(rateLimitTokensKeyFmt, id) }
+func rlRequestKey(id string) string { return fmt.Sprintf(rateLimitRequestsKeyFmt, id) }
+func budgetKey(id string) string    { return fmt.Sprintf(budgetSpentKeyFmt, id) }
+
+
 // luaMerge initializes a key from postgres_baseline if absent, then adds local_delta (if > 0).
 var luaMerge = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then
@@ -50,19 +55,19 @@ func NewRedisCounterClient(client redis.UniversalClient) *RedisCounterClient {
 
 // IncrTokens increments the token counter for a rate limit.
 func (r *RedisCounterClient) IncrTokens(ctx context.Context, rateLimitID string, delta int64) (int64, error) {
-	key := fmt.Sprintf(rateLimitTokensKeyFmt, rateLimitID)
+	key := rlTokenKey(rateLimitID)
 	return r.client.IncrBy(ctx, key, delta).Result()
 }
 
 // IncrRequests increments the request counter for a rate limit.
 func (r *RedisCounterClient) IncrRequests(ctx context.Context, rateLimitID string, delta int64) (int64, error) {
-	key := fmt.Sprintf(rateLimitRequestsKeyFmt, rateLimitID)
+	key := rlRequestKey(rateLimitID)
 	return r.client.IncrBy(ctx, key, delta).Result()
 }
 
 // GetTokens reads the token counter for a rate limit.
 func (r *RedisCounterClient) GetTokens(ctx context.Context, rateLimitID string) (int64, error) {
-	key := fmt.Sprintf(rateLimitTokensKeyFmt, rateLimitID)
+	key := rlTokenKey(rateLimitID)
 	val, err := r.client.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return 0, nil
@@ -75,7 +80,7 @@ func (r *RedisCounterClient) GetTokens(ctx context.Context, rateLimitID string) 
 
 // GetRequests reads the request counter for a rate limit.
 func (r *RedisCounterClient) GetRequests(ctx context.Context, rateLimitID string) (int64, error) {
-	key := fmt.Sprintf(rateLimitRequestsKeyFmt, rateLimitID)
+	key := rlRequestKey(rateLimitID)
 	val, err := r.client.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return 0, nil
@@ -88,8 +93,8 @@ func (r *RedisCounterClient) GetRequests(ctx context.Context, rateLimitID string
 
 // ResetRateLimit sets both counters to 0 with optional TTL.
 func (r *RedisCounterClient) ResetRateLimit(ctx context.Context, rateLimitID string, ttlSeconds int64) error {
-	tokenKey := fmt.Sprintf(rateLimitTokensKeyFmt, rateLimitID)
-	requestKey := fmt.Sprintf(rateLimitRequestsKeyFmt, rateLimitID)
+	tokenKey := rlTokenKey(rateLimitID)
+	requestKey := rlRequestKey(rateLimitID)
 	var ttl time.Duration
 	if ttlSeconds > 0 {
 		ttl = time.Duration(ttlSeconds) * time.Second
@@ -103,7 +108,7 @@ func (r *RedisCounterClient) ResetRateLimit(ctx context.Context, rateLimitID str
 
 // ResetRateLimitTokens sets only the token counter to 0 with optional TTL.
 func (r *RedisCounterClient) ResetRateLimitTokens(ctx context.Context, rateLimitID string, ttlSeconds int64) error {
-	key := fmt.Sprintf(rateLimitTokensKeyFmt, rateLimitID)
+	key := rlTokenKey(rateLimitID)
 	var ttl time.Duration
 	if ttlSeconds > 0 {
 		ttl = time.Duration(ttlSeconds) * time.Second
@@ -113,7 +118,7 @@ func (r *RedisCounterClient) ResetRateLimitTokens(ctx context.Context, rateLimit
 
 // ResetRateLimitRequests sets only the request counter to 0 with optional TTL.
 func (r *RedisCounterClient) ResetRateLimitRequests(ctx context.Context, rateLimitID string, ttlSeconds int64) error {
-	key := fmt.Sprintf(rateLimitRequestsKeyFmt, rateLimitID)
+	key := rlRequestKey(rateLimitID)
 	var ttl time.Duration
 	if ttlSeconds > 0 {
 		ttl = time.Duration(ttlSeconds) * time.Second
@@ -123,13 +128,13 @@ func (r *RedisCounterClient) ResetRateLimitRequests(ctx context.Context, rateLim
 
 // IncrBudget increments the budget spent counter.
 func (r *RedisCounterClient) IncrBudget(ctx context.Context, budgetID string, delta float64) (float64, error) {
-	key := fmt.Sprintf(budgetSpentKeyFmt, budgetID)
+	key := budgetKey(budgetID)
 	return r.client.IncrByFloat(ctx, key, delta).Result()
 }
 
 // GetBudget reads the budget spent counter.
 func (r *RedisCounterClient) GetBudget(ctx context.Context, budgetID string) (float64, error) {
-	key := fmt.Sprintf(budgetSpentKeyFmt, budgetID)
+	key := budgetKey(budgetID)
 	val, err := r.client.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return 0, nil
@@ -142,7 +147,7 @@ func (r *RedisCounterClient) GetBudget(ctx context.Context, budgetID string) (fl
 
 // ResetBudget sets the budget counter to 0 with optional TTL.
 func (r *RedisCounterClient) ResetBudget(ctx context.Context, budgetID string, ttlSeconds int64) error {
-	key := fmt.Sprintf(budgetSpentKeyFmt, budgetID)
+	key := budgetKey(budgetID)
 	var ttl time.Duration
 	if ttlSeconds > 0 {
 		ttl = time.Duration(ttlSeconds) * time.Second
@@ -266,8 +271,8 @@ func (gs *LocalGovernanceStore) RunRecoveryMerge(ctx context.Context) bool {
 			return false
 		}
 
-		tokenKey := fmt.Sprintf("bifrost:rl:%s:tokens", snap.id)
-		requestKey := fmt.Sprintf("bifrost:rl:%s:requests", snap.id)
+		tokenKey := rlTokenKey(snap.id)
+		requestKey := rlRequestKey(snap.id)
 
 		if err := gs.redisCounters.MergeDelta(ctx, tokenKey, rl.TokenCurrentUsage, tokenDelta); err != nil {
 			gs.logger.Error("recovery merge failed for %s tokens: %v", snap.id, err)
@@ -313,7 +318,7 @@ func (gs *LocalGovernanceStore) RunRecoveryMerge(ctx context.Context) bool {
 			return false
 		}
 
-		key := fmt.Sprintf("bifrost:budget:%s:spent", snap.id)
+		key := budgetKey(snap.id)
 		if err := gs.redisCounters.MergeBudgetDelta(ctx, key, budget.CurrentUsage, delta); err != nil {
 			gs.logger.Error("recovery merge failed for budget %s: %v", snap.id, err)
 			return false
