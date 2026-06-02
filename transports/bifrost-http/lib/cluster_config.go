@@ -24,6 +24,7 @@ type ClusterRedisConfig struct {
 	Addr        schemas.EnvVar   `json:"addr"`
 	Addrs       []schemas.EnvVar `json:"addrs"`
 	ClusterMode bool             `json:"cluster_mode"`
+	// password is a secret; if this block is ever returned via API, redact via .Redacted()
 	Password    schemas.EnvVar   `json:"password"`
 	DB          int              `json:"db"`
 	PoolSize    int              `json:"pool_size"`
