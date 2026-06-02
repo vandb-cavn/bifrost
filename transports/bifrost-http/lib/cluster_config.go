@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/maximhq/bifrost/core/schemas"
 )
 
 // ClusterTLSConfig holds TLS settings for the cluster Redis connection.
@@ -19,10 +21,10 @@ type ClusterTLSConfig struct {
 
 // ClusterRedisConfig holds connection parameters for the cluster Redis.
 type ClusterRedisConfig struct {
-	Addr        string           `json:"addr"`
-	Addrs       []string         `json:"addrs"`
+	Addr        schemas.EnvVar   `json:"addr"`
+	Addrs       []schemas.EnvVar `json:"addrs"`
 	ClusterMode bool             `json:"cluster_mode"`
-	Password    string           `json:"password"`
+	Password    schemas.EnvVar   `json:"password"`
 	DB          int              `json:"db"`
 	PoolSize    int              `json:"pool_size"`
 	TLS         ClusterTLSConfig `json:"tls"`
@@ -31,7 +33,7 @@ type ClusterRedisConfig struct {
 // ClusterConfig is the top-level optional cluster block in config.json.
 // Absent → single-node mode, all Redis code paths skipped.
 type ClusterConfig struct {
-	NodeID        string             `json:"node_id"`
+	NodeID        schemas.EnvVar     `json:"node_id"`
 	StrictBudgets bool               `json:"strict_budgets"`
 	Redis         ClusterRedisConfig `json:"redis"`
 }
@@ -39,8 +41,8 @@ type ClusterConfig struct {
 // ConsumerID returns the stable consumer identity for cursor persistence.
 // Prefers cluster.node_id, then BIFROST_NODE_ID env var, then os.Hostname().
 func (c *ClusterConfig) ConsumerID() string {
-	if c != nil && c.NodeID != "" {
-		return c.NodeID
+	if c != nil && c.NodeID.GetValue() != "" {
+		return c.NodeID.GetValue()
 	}
 	if env := os.Getenv("BIFROST_NODE_ID"); env != "" {
 		return env
@@ -92,9 +94,16 @@ func (r *ClusterRedisConfig) tlsConfig() (*tls.Config, error) {
 // NewRedisUniversalClient builds a redis.UniversalClient from ClusterRedisConfig.
 // Returns nil if addr and addrs are both empty (no Redis configured).
 func (r *ClusterRedisConfig) NewRedisUniversalClient() (redis.UniversalClient, error) {
-	addrs := r.Addrs
-	if len(addrs) == 0 && r.Addr != "" {
-		addrs = []string{r.Addr}
+	addrs := make([]string, 0, len(r.Addrs))
+	for i := range r.Addrs {
+		if v := r.Addrs[i].GetValue(); v != "" {
+			addrs = append(addrs, v)
+		}
+	}
+	if len(addrs) == 0 {
+		if v := r.Addr.GetValue(); v != "" {
+			addrs = []string{v}
+		}
 	}
 	if len(addrs) == 0 {
 		return nil, nil
@@ -107,7 +116,7 @@ func (r *ClusterRedisConfig) NewRedisUniversalClient() (redis.UniversalClient, e
 	if r.ClusterMode {
 		return redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:      addrs,
-			Password:   r.Password,
+			Password:   r.Password.GetValue(),
 			PoolSize:   ps,
 			TLSConfig:  tlsCfg,
 			MaxRetries: 3,
@@ -115,10 +124,11 @@ func (r *ClusterRedisConfig) NewRedisUniversalClient() (redis.UniversalClient, e
 	}
 	return redis.NewClient(&redis.Options{
 		Addr:       addrs[0],
-		Password:   r.Password,
+		Password:   r.Password.GetValue(),
 		DB:         r.DB,
 		PoolSize:   ps,
 		TLSConfig:  tlsCfg,
 		MaxRetries: 3,
 	}), nil
 }
+
