@@ -458,55 +458,55 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 	logger.Debug("cluster sync: handler apply type=%s action=%s id=%s", event.Type, event.Action, event.ID)
 
 	switch event.Type {
-	case "full_reload":
+	case configstore.EventTypeFullReload:
 		if err := s.FullReload(ctx); err != nil {
 			logger.Warn("cluster: FullReload failed: %v", err)
 		}
-	case "provider":
-		if event.Action == "delete" {
+	case configstore.EventTypeProvider:
+		if event.Action == configstore.ActionDelete {
 			skipCtx := context.WithValue(ctx, schemas.BifrostContextKeySkipDBUpdate, true)
 			_ = s.RemoveProvider(skipCtx, schemas.ModelProvider(event.ID))
 		} else {
 			_, _ = s.ReloadProvider(ctx, schemas.ModelProvider(event.ID))
 		}
-	case "virtual_key":
-		if event.Action == "delete" {
+	case configstore.EventTypeVirtualKey:
+		if event.Action == configstore.ActionDelete {
 			_ = s.RemoveVirtualKey(ctx, event.ID)
 		} else {
 			_, _ = s.ReloadVirtualKey(ctx, event.ID)
 		}
-	case "team":
-		if event.Action == "delete" {
+	case configstore.EventTypeTeam:
+		if event.Action == configstore.ActionDelete {
 			_ = s.RemoveTeam(ctx, event.ID)
 		} else {
 			_, _ = s.ReloadTeam(ctx, event.ID)
 		}
-	case "customer":
-		if event.Action == "delete" {
+	case configstore.EventTypeCustomer:
+		if event.Action == configstore.ActionDelete {
 			_ = s.RemoveCustomer(ctx, event.ID)
 		} else {
 			_, _ = s.ReloadCustomer(ctx, event.ID)
 		}
-	case "model_config":
-		if event.Action == "delete" {
+	case configstore.EventTypeModelConfig:
+		if event.Action == configstore.ActionDelete {
 			_ = s.RemoveModelConfig(ctx, event.ID)
 		} else {
 			_, _ = s.ReloadModelConfig(ctx, event.ID)
 		}
-	case "routing_rule":
-		if event.Action == "delete" {
+	case configstore.EventTypeRoutingRule:
+		if event.Action == configstore.ActionDelete {
 			_ = s.RemoveRoutingRule(ctx, event.ID)
 		} else {
 			_ = s.ReloadRoutingRule(ctx, event.ID)
 		}
-	case "mcp_client":
-		if event.Action == "delete" {
+	case configstore.EventTypeMCPClient:
+		if event.Action == configstore.ActionDelete {
 			_ = s.RemoveMCPClient(ctx, event.ID)
 		} else {
 			_ = s.ReconnectMCPClient(ctx, event.ID)
 		}
-	case "plugin":
-		if event.Action == "delete" {
+	case configstore.EventTypePlugin:
+		if event.Action == configstore.ActionDelete {
 			if st, ok := s.Config.GetPluginStatusByName(event.ID); ok {
 				_ = s.RemovePlugin(ctx, st.Name)
 			}
@@ -515,9 +515,9 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 				_ = s.ReloadPlugin(ctx, event.ID, p.Path, p.Config, p.Placement, p.Order)
 			}
 		}
-	case "client_config":
+	case configstore.EventTypeClientConfig:
 		_ = s.ReloadClientConfigFromConfigStore(ctx)
-	case "auth_config":
+	case configstore.EventTypeAuthConfig:
 		// Read from DB; update AuthMiddleware in-memory only. Do NOT call s.UpdateAuthConfig —
 		// that method also writes to DB, which would cause a double-write on peer nodes.
 		if config, err := s.Config.ConfigStore.GetAuthConfig(ctx); err == nil && config != nil {
@@ -527,7 +527,7 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		} else if err != nil {
 			logger.Warn("cluster: auth config reload failed: %v", err)
 		}
-	case "proxy_config":
+	case configstore.EventTypeProxyConfig:
 		// ReloadProxyConfig is in-memory only (sets s.Config.ProxyConfig).
 		// (nil, nil) from GetProxyConfig means no proxy in DB — pass nil through to clear RAM.
 		if config, err := s.Config.ConfigStore.GetProxyConfig(ctx); err == nil {
@@ -535,7 +535,7 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		} else {
 			logger.Warn("cluster: proxy config reload failed: %v", err)
 		}
-	case "framework_config":
+	case configstore.EventTypeFrameworkConfig:
 		// Read TableFrameworkConfig from DB, map pricing fields, then call UpdateSyncConfig.
 		if dbConfig, err := s.Config.ConfigStore.GetFrameworkConfig(ctx); err == nil && dbConfig != nil {
 			if s.Config.FrameworkConfig == nil {
@@ -548,9 +548,9 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 		} else if err != nil {
 			logger.Warn("cluster: framework config reload failed: %v", err)
 		}
-	case "pricing_override":
+	case configstore.EventTypePricingOverride:
 		// UpsertPricingOverride / DeletePricingOverride are in-memory only — safe on peer nodes.
-		if event.Action == "delete" {
+		if event.Action == configstore.ActionDelete {
 			_ = s.DeletePricingOverride(ctx, event.ID)
 		} else {
 			if override, err := s.Config.ConfigStore.GetPricingOverrideByID(ctx, event.ID); err == nil && override != nil {
@@ -559,6 +559,8 @@ func (s *BifrostHTTPServer) handleConfigSyncEvent(event configstore.ConfigSyncEv
 				logger.Warn("cluster: pricing override %s reload failed: %v", event.ID, err)
 			}
 		}
+	default:
+		logger.Warn("cluster: unknown sync event type=%q action=%q id=%s", event.Type, event.Action, event.ID)
 	}
 }
 

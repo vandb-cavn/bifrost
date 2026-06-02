@@ -32,6 +32,27 @@ type ConfigSyncEvent struct {
 	NodeID    string    `json:"node_id"`
 }
 
+const (
+	EventTypeFullReload      = "full_reload"
+	EventTypeProvider        = "provider"
+	EventTypeVirtualKey      = "virtual_key"
+	EventTypeTeam            = "team"
+	EventTypeCustomer        = "customer"
+	EventTypeModelConfig     = "model_config"
+	EventTypeRoutingRule     = "routing_rule"
+	EventTypeMCPClient       = "mcp_client"
+	EventTypePlugin          = "plugin"
+	EventTypeClientConfig    = "client_config"
+	EventTypeAuthConfig      = "auth_config"
+	EventTypeProxyConfig     = "proxy_config"
+	EventTypePricingOverride = "pricing_override"
+	EventTypeFrameworkConfig = "framework_config"
+
+	ActionUpsert = "upsert"
+	ActionDelete = "delete"
+)
+
+
 // ClusterSyncer publishes and subscribes to config change events.
 type ClusterSyncer interface {
 	Publish(ctx context.Context, event ConfigSyncEvent) error

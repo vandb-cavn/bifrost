@@ -93,7 +93,7 @@ func (pcs *PublishingConfigStore) UpdateProvidersConfig(ctx context.Context, pro
 	if err := pcs.ConfigStore.UpdateProvidersConfig(ctx, providers, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -102,7 +102,7 @@ func (pcs *PublishingConfigStore) AddProvider(ctx context.Context, provider sche
 	if err := pcs.ConfigStore.AddProvider(ctx, provider, config, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProvider, Action: ActionUpsert, ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -111,7 +111,7 @@ func (pcs *PublishingConfigStore) UpdateProvider(ctx context.Context, provider s
 	if err := pcs.ConfigStore.UpdateProvider(ctx, provider, config, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProvider, Action: ActionUpsert, ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -120,7 +120,7 @@ func (pcs *PublishingConfigStore) DeleteProvider(ctx context.Context, provider s
 	if err := pcs.ConfigStore.DeleteProvider(ctx, provider, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "delete", ID: string(provider)}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProvider, Action: ActionDelete, ID: string(provider)}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -129,7 +129,7 @@ func (pcs *PublishingConfigStore) CreateVirtualKey(ctx context.Context, vk *tabl
 	if err := pcs.ConfigStore.CreateVirtualKey(ctx, vk, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vk.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionUpsert, ID: vk.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -138,7 +138,7 @@ func (pcs *PublishingConfigStore) UpdateVirtualKey(ctx context.Context, vk *tabl
 	if err := pcs.ConfigStore.UpdateVirtualKey(ctx, vk, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vk.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionUpsert, ID: vk.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -147,7 +147,7 @@ func (pcs *PublishingConfigStore) DeleteVirtualKey(ctx context.Context, id strin
 	if err := pcs.ConfigStore.DeleteVirtualKey(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionDelete, ID: id}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (pcs *PublishingConfigStore) CreateTeam(ctx context.Context, team *tables.T
 	if err := pcs.ConfigStore.CreateTeam(ctx, team, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "team", Action: "upsert", ID: team.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeTeam, Action: ActionUpsert, ID: team.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -165,7 +165,7 @@ func (pcs *PublishingConfigStore) UpdateTeam(ctx context.Context, team *tables.T
 	if err := pcs.ConfigStore.UpdateTeam(ctx, team, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "team", Action: "upsert", ID: team.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeTeam, Action: ActionUpsert, ID: team.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -173,7 +173,7 @@ func (pcs *PublishingConfigStore) DeleteTeam(ctx context.Context, id string) err
 	if err := pcs.ConfigStore.DeleteTeam(ctx, id); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "team", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeTeam, Action: ActionDelete, ID: id}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -182,7 +182,7 @@ func (pcs *PublishingConfigStore) CreateCustomer(ctx context.Context, c *tables.
 	if err := pcs.ConfigStore.CreateCustomer(ctx, c, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "customer", Action: "upsert", ID: c.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeCustomer, Action: ActionUpsert, ID: c.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -191,7 +191,7 @@ func (pcs *PublishingConfigStore) UpdateCustomer(ctx context.Context, c *tables.
 	if err := pcs.ConfigStore.UpdateCustomer(ctx, c, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "customer", Action: "upsert", ID: c.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeCustomer, Action: ActionUpsert, ID: c.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -199,7 +199,7 @@ func (pcs *PublishingConfigStore) DeleteCustomer(ctx context.Context, id string)
 	if err := pcs.ConfigStore.DeleteCustomer(ctx, id); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "customer", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeCustomer, Action: ActionDelete, ID: id}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -208,7 +208,7 @@ func (pcs *PublishingConfigStore) CreateModelConfig(ctx context.Context, mc *tab
 	if err := pcs.ConfigStore.CreateModelConfig(ctx, mc, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "model_config", Action: "upsert", ID: mc.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeModelConfig, Action: ActionUpsert, ID: mc.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -217,7 +217,7 @@ func (pcs *PublishingConfigStore) UpdateModelConfig(ctx context.Context, mc *tab
 	if err := pcs.ConfigStore.UpdateModelConfig(ctx, mc, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "model_config", Action: "upsert", ID: mc.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeModelConfig, Action: ActionUpsert, ID: mc.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -226,7 +226,7 @@ func (pcs *PublishingConfigStore) UpdateModelConfigs(ctx context.Context, modelC
 	if err := pcs.ConfigStore.UpdateModelConfigs(ctx, modelConfigs, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -234,7 +234,7 @@ func (pcs *PublishingConfigStore) DeleteModelConfig(ctx context.Context, id stri
 	if err := pcs.ConfigStore.DeleteModelConfig(ctx, id); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "model_config", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeModelConfig, Action: ActionDelete, ID: id}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -243,7 +243,7 @@ func (pcs *PublishingConfigStore) CreateRoutingRule(ctx context.Context, rule *t
 	if err := pcs.ConfigStore.CreateRoutingRule(ctx, rule, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "routing_rule", Action: "upsert", ID: rule.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeRoutingRule, Action: ActionUpsert, ID: rule.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -252,7 +252,7 @@ func (pcs *PublishingConfigStore) UpdateRoutingRule(ctx context.Context, rule *t
 	if err := pcs.ConfigStore.UpdateRoutingRule(ctx, rule, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "routing_rule", Action: "upsert", ID: rule.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeRoutingRule, Action: ActionUpsert, ID: rule.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -261,7 +261,7 @@ func (pcs *PublishingConfigStore) DeleteRoutingRule(ctx context.Context, id stri
 	if err := pcs.ConfigStore.DeleteRoutingRule(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "routing_rule", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeRoutingRule, Action: ActionDelete, ID: id}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -269,7 +269,7 @@ func (pcs *PublishingConfigStore) CreateMCPClientConfig(ctx context.Context, cc 
 	if err := pcs.ConfigStore.CreateMCPClientConfig(ctx, cc); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "mcp_client", Action: "upsert", ID: cc.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeMCPClient, Action: ActionUpsert, ID: cc.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -277,7 +277,7 @@ func (pcs *PublishingConfigStore) UpdateMCPClientConfig(ctx context.Context, id 
 	if err := pcs.ConfigStore.UpdateMCPClientConfig(ctx, id, cc); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "mcp_client", Action: "upsert", ID: id, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeMCPClient, Action: ActionUpsert, ID: id, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -285,7 +285,7 @@ func (pcs *PublishingConfigStore) DeleteMCPClientConfig(ctx context.Context, id 
 	if err := pcs.ConfigStore.DeleteMCPClientConfig(ctx, id); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "mcp_client", Action: "delete", ID: id}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeMCPClient, Action: ActionDelete, ID: id}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -294,7 +294,7 @@ func (pcs *PublishingConfigStore) CreatePlugin(ctx context.Context, plugin *tabl
 	if err := pcs.ConfigStore.CreatePlugin(ctx, plugin, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "plugin", Action: "upsert", ID: plugin.Name, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePlugin, Action: ActionUpsert, ID: plugin.Name, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -303,7 +303,7 @@ func (pcs *PublishingConfigStore) UpsertPlugin(ctx context.Context, plugin *tabl
 	if err := pcs.ConfigStore.UpsertPlugin(ctx, plugin, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "plugin", Action: "upsert", ID: plugin.Name, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePlugin, Action: ActionUpsert, ID: plugin.Name, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -312,7 +312,7 @@ func (pcs *PublishingConfigStore) UpdatePlugin(ctx context.Context, plugin *tabl
 	if err := pcs.ConfigStore.UpdatePlugin(ctx, plugin, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "plugin", Action: "upsert", ID: plugin.Name, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePlugin, Action: ActionUpsert, ID: plugin.Name, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -321,7 +321,7 @@ func (pcs *PublishingConfigStore) DeletePlugin(ctx context.Context, name string,
 	if err := pcs.ConfigStore.DeletePlugin(ctx, name, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "plugin", Action: "delete", ID: name}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePlugin, Action: ActionDelete, ID: name}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -329,7 +329,7 @@ func (pcs *PublishingConfigStore) UpdateClientConfig(ctx context.Context, config
 	if err := pcs.ConfigStore.UpdateClientConfig(ctx, config); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "client_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeClientConfig, Action: ActionUpsert, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -337,7 +337,7 @@ func (pcs *PublishingConfigStore) UpdateAuthConfig(ctx context.Context, config *
 	if err := pcs.ConfigStore.UpdateAuthConfig(ctx, config); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "auth_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeAuthConfig, Action: ActionUpsert, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -345,7 +345,7 @@ func (pcs *PublishingConfigStore) UpdateProxyConfig(ctx context.Context, config 
 	if err := pcs.ConfigStore.UpdateProxyConfig(ctx, config); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "proxy_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProxyConfig, Action: ActionUpsert, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -353,7 +353,7 @@ func (pcs *PublishingConfigStore) UpdateFrameworkConfig(ctx context.Context, con
 	if err := pcs.ConfigStore.UpdateFrameworkConfig(ctx, config); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "framework_config", Action: "upsert", UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFrameworkConfig, Action: ActionUpsert, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -362,7 +362,7 @@ func (pcs *PublishingConfigStore) CreateProviderKey(ctx context.Context, provide
 	if err := pcs.ConfigStore.CreateProviderKey(ctx, provider, key, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProvider, Action: ActionUpsert, ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -371,7 +371,7 @@ func (pcs *PublishingConfigStore) UpdateProviderKey(ctx context.Context, provide
 	if err := pcs.ConfigStore.UpdateProviderKey(ctx, provider, keyID, key, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProvider, Action: ActionUpsert, ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -380,7 +380,7 @@ func (pcs *PublishingConfigStore) DeleteProviderKey(ctx context.Context, provide
 	if err := pcs.ConfigStore.DeleteProviderKey(ctx, provider, keyID, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "provider", Action: "upsert", ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeProvider, Action: ActionUpsert, ID: string(provider), UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -389,7 +389,7 @@ func (pcs *PublishingConfigStore) CreateVirtualKeyProviderConfig(ctx context.Con
 	if err := pcs.ConfigStore.CreateVirtualKeyProviderConfig(ctx, vkpc, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkpc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionUpsert, ID: vkpc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -398,7 +398,7 @@ func (pcs *PublishingConfigStore) UpdateVirtualKeyProviderConfig(ctx context.Con
 	if err := pcs.ConfigStore.UpdateVirtualKeyProviderConfig(ctx, vkpc, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkpc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionUpsert, ID: vkpc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -407,7 +407,7 @@ func (pcs *PublishingConfigStore) DeleteVirtualKeyProviderConfig(ctx context.Con
 	if err := pcs.ConfigStore.DeleteVirtualKeyProviderConfig(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -416,7 +416,7 @@ func (pcs *PublishingConfigStore) CreateVirtualKeyMCPConfig(ctx context.Context,
 	if err := pcs.ConfigStore.CreateVirtualKeyMCPConfig(ctx, vkmc, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkmc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionUpsert, ID: vkmc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -425,7 +425,7 @@ func (pcs *PublishingConfigStore) UpdateVirtualKeyMCPConfig(ctx context.Context,
 	if err := pcs.ConfigStore.UpdateVirtualKeyMCPConfig(ctx, vkmc, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "virtual_key", Action: "upsert", ID: vkmc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeVirtualKey, Action: ActionUpsert, ID: vkmc.VirtualKeyID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -434,7 +434,7 @@ func (pcs *PublishingConfigStore) DeleteVirtualKeyMCPConfig(ctx context.Context,
 	if err := pcs.ConfigStore.DeleteVirtualKeyMCPConfig(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -443,7 +443,7 @@ func (pcs *PublishingConfigStore) CreatePricingOverride(ctx context.Context, ove
 	if err := pcs.ConfigStore.CreatePricingOverride(ctx, override, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "pricing_override", Action: "upsert", ID: override.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePricingOverride, Action: ActionUpsert, ID: override.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -452,7 +452,7 @@ func (pcs *PublishingConfigStore) UpdatePricingOverride(ctx context.Context, ove
 	if err := pcs.ConfigStore.UpdatePricingOverride(ctx, override, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "pricing_override", Action: "upsert", ID: override.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePricingOverride, Action: ActionUpsert, ID: override.ID, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -461,7 +461,7 @@ func (pcs *PublishingConfigStore) DeletePricingOverride(ctx context.Context, id 
 	if err := pcs.ConfigStore.DeletePricingOverride(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "pricing_override", Action: "delete", ID: id, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypePricingOverride, Action: ActionDelete, ID: id, UpdatedAt: time.Now()}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -470,7 +470,7 @@ func (pcs *PublishingConfigStore) CreateRateLimit(ctx context.Context, rl *table
 	if err := pcs.ConfigStore.CreateRateLimit(ctx, rl, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -479,7 +479,7 @@ func (pcs *PublishingConfigStore) UpdateRateLimit(ctx context.Context, rl *table
 	if err := pcs.ConfigStore.UpdateRateLimit(ctx, rl, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -488,7 +488,7 @@ func (pcs *PublishingConfigStore) UpdateRateLimits(ctx context.Context, rls []*t
 	if err := pcs.ConfigStore.UpdateRateLimits(ctx, rls, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -497,7 +497,7 @@ func (pcs *PublishingConfigStore) DeleteRateLimit(ctx context.Context, id string
 	if err := pcs.ConfigStore.DeleteRateLimit(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -506,7 +506,7 @@ func (pcs *PublishingConfigStore) CreateBudget(ctx context.Context, b *tables.Ta
 	if err := pcs.ConfigStore.CreateBudget(ctx, b, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -515,7 +515,7 @@ func (pcs *PublishingConfigStore) UpdateBudget(ctx context.Context, b *tables.Ta
 	if err := pcs.ConfigStore.UpdateBudget(ctx, b, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -524,7 +524,7 @@ func (pcs *PublishingConfigStore) UpdateBudgets(ctx context.Context, bs []*table
 	if err := pcs.ConfigStore.UpdateBudgets(ctx, bs, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -533,7 +533,7 @@ func (pcs *PublishingConfigStore) DeleteBudget(ctx context.Context, id string, t
 	if err := pcs.ConfigStore.DeleteBudget(ctx, id, tx...); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -541,7 +541,7 @@ func (pcs *PublishingConfigStore) UpdateVectorStoreConfig(ctx context.Context, c
 	if err := pcs.ConfigStore.UpdateVectorStoreConfig(ctx, config); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
 
@@ -549,6 +549,6 @@ func (pcs *PublishingConfigStore) UpdateLogsStoreConfig(ctx context.Context, con
 	if err := pcs.ConfigStore.UpdateLogsStoreConfig(ctx, config); err != nil {
 		return err
 	}
-	scheduleEvent(ctx, ConfigSyncEvent{Type: "full_reload", Action: "upsert"}, pcs.syncer, pcs.nodeID)
+	scheduleEvent(ctx, ConfigSyncEvent{Type: EventTypeFullReload, Action: ActionUpsert}, pcs.syncer, pcs.nodeID)
 	return nil
 }
